@@ -1,0 +1,115 @@
+---
+title: "LinearDiscriminantAnalysis-LDA"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+We try to test linear discvriminant analysis using our own generated data. We will have two data sets with labels A and B with different means and common variance.
+
+```{r cars}
+getTransformMatrix <- function(covMat)
+{
+  svdRes <- svd(covMat)
+  
+  U <- svdRes$u
+  D <- diag(svdRes$d)
+  V <- svdRes$v
+  A = U %*% (D^0.5)
+  A
+}
+
+vars      <- c(4, 4)
+#correlMat
+correlMat1 <- rbind(c(1, 0.4),
+                   c(0.4, 1))
+
+
+
+covMat1   <- diag(vars) %*% correlMat1 %*% diag(vars)
+covMat2   <- covMat1
+
+MU1       <- matrix(c(5,6), ncol=1)
+MU2       <- matrix(c(5,-3), ncol=1)
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r, echo=FALSE}
+N1 <- 300
+N2 <- 300
+
+getData <- function(N, MU, covMat)
+{
+  e <- matrix(rnorm(2*N), nrow = 2)
+  matrix(MU, ncol = N, nrow=2) + getTransformMatrix(covMat) %*% matrix(rnorm(2*N), nrow = 2)
+}
+
+#generate data points  for each distribution
+#1. Random Normals
+e <- matrix(rnorm(2*N1), nrow = 2)
+#Data for fist set
+D1 <- getData(N = N1, MU = MU1, covMat = covMat1)
+D2 <- getData(N = N2, MU = MU2, covMat = covMat2)
+
+dat_1 <- data.frame(x = D1[1,], y = D1[2,], "type" = "1")
+dat_2 <- data.frame(x = D2[1,], y = D2[2,], "type" = "2")
+
+bindedDat <- rbind(dat_1, dat_2)
+
+bindedDat[["categ"]] = bindedDat$type == 1
+
+library(ggplot2)
+ggplot(bindedDat, aes(x=x, y=y, color=type)) + geom_point(shape=1) + 
+  geom_smooth(method=lm,   # Add linear regression lines
+              se=FALSE)    # Don't add shaded confidence region
+
+```
+
+
+#Logistic Regression
+
+```{r}
+library(caTools)
+set.seed(101) 
+sample = sample.split(bindedDat$categ, SplitRatio = .75)
+train = subset(bindedDat, sample == TRUE)
+test  = subset(bindedDat, sample == FALSE)
+
+table(train$categ)
+table(test$categ)
+
+
+logistic.fit = glm(categ ~ x + y, data = train, family = binomial)
+summary(logistic.fit)
+```
+
+```{r}
+fitted.results <- predict(logistic.fit, newdata=test, type='response')
+fitted.results
+
+t <- table(fitted.results > 0.5, test$categ == 1)
+t
+#Accuracy
+sum(diag(t))/sum(t)
+```
+
+
+```{r}
+library(ROCR)
+p <- predict(logistic.fit, newdata=test, type="response")
+pr <- prediction(p, test$categ)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf)
+
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+```
