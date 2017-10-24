@@ -11,6 +11,7 @@ getTransformMatrix <- function(covMat)
   A
 }
 
+dimension=2
 N      <- 1000
 rho    <- 0.8
 
@@ -94,183 +95,67 @@ findoutliers.mahlanobis <- function(in.df, dimension, pctOuliers)
 }
 
 
-res      <- findoutliers.mahlanobis(in.df = datf, dimension = 2, 0.05)
+res      <- findoutliers.mahlanobis(in.df = datf, dimension = dimension, 0.05)
 datf.new <- res$result 
 ggplot(datf.new, aes(x=x, y=y, color = OUTL)) + geom_point(shape=1)
 
 
-#
+#--- Let us now try radially shifting the outlier data
+hist(datf.new[datf.new$OUTL != TRUE, "mh.dist"])
 
+mh.dist.max <- max(datf.new[datf.new$OUTL != TRUE, "mh.dist"])
+center      <- matrix(apply(datf.new[datf.new$OUTL != TRUE, 1:dimension], 2, mean, na.rm = TRUE), ncol = 1)
+covmat      <- cov(datf.new[datf.new$OUTL != TRUE, 1:dimension])
 
-
-
-
-
-
-
-
-#1. Fist let us generate a data normally distributed with some mean and variance.
-#2. We should also generate a t-distributed data
-
-set.seed(1)
-N = 10000
-good <- rnorm(n = N, mean = 0, sd = 1)
-N_bad <- 50
-bad  <- rnorm(n = N_bad, mean = 0, sd = 5)
-dat <- rbind( data.frame("x" = good, "categ" = "good"),
-            data.frame("x" = bad , "categ" = "bad"))
-
-
-head(dat)
-
-#---------------------- Density Plots --------------------------#
-library(ggplot2)
-# Density plots with semi-transparent fill
-ggplot(dat, aes(x=x, fill=categ)) + geom_density(alpha=.3)
-
-# Density plots with semi-transparent fill
-ggplot(dat, aes(x=x)) + geom_density(alpha=.3)
-
-
-#Create a custom color scale
-library(RColorBrewer)
-myColors        <- brewer.pal(5,"Set1")
-names(myColors) <- levels(dat$categ)
-colScale        <- scale_colour_manual(name = "categ",values = myColors)
-
-
-#---------------------- Scatter Plots 
-# Same, but with different colors and add regression lines
-ggplot(dat, aes(x=x, y=x, color=categ)) +
-  geom_point(shape=1) +
-  #scale_colour_hue(l=50) +  # Use a slightly darker palette than normal
-  colScale
-
-
-#---------------------------------------------------------------#
-#---------------------------------------------------------------#
-#Functions for MAD
-DoubleMAD <- function(x, zero.mad.action="warn"){
-  # The zero.mad.action determines the action in the event of an MAD of zero.
-  # Possible values: "stop", "warn", "na" and "warn and na".
-  x         <- x[!is.na(x)]
-  m         <- median(x)
-  abs.dev   <- abs(x - m)
-  left.mad  <- median(abs.dev[x<=m])
-  right.mad <- median(abs.dev[x>=m])
-  if (left.mad == 0 || right.mad == 0){
-    if (zero.mad.action == "stop") stop("MAD is 0")
-    if (zero.mad.action %in% c("warn", "warn and na")) warning("MAD is 0")
-    if (zero.mad.action %in% c(  "na", "warn and na")){
-      if (left.mad  == 0) left.mad  <- NA
-      if (right.mad == 0) right.mad <- NA
-    }
-  }
-  return(c(left.mad, right.mad))
-}
-#- function:
-DoubleMADsFromMedian <- function(x, zero.mad.action="warn"){
-  # The zero.mad.action determines the action in the event of an MAD of zero.
-  # Possible values: "stop", "warn", "na" and "warn and na".
-  two.sided.mad <- DoubleMAD(x, zero.mad.action)
-  m <- median(x, na.rm=TRUE)
-  x.mad <- rep(two.sided.mad[1], length(x))
-  x.mad[x > m] <- two.sided.mad[2]
-  mad.distance <- abs(x - m) / x.mad
-  mad.distance[x==m] <- 0
-  return(mad.distance)
-}
-#check if it works
-#pred.tmp[["MAD"]] =  DoubleMADsFromMedian(x) 
-#ggplot(data.frame("MAD" = DoubleMADsFromMedian(x)), aes(x=MAD)) + geom_density() + ggtitle(sprintf("%s",datePoints))
-
-#4.
-#---- New way of MAD
-New_DoubleMADsFromMedian <- function(x, zero.mad.action="warn"){
-  # The zero.mad.action determines the action in the event of an MAD of zero.
-  # Possible values: "stop", "warn", "na" and "warn and na".
-  two.sided.mad <- DoubleMAD(x, zero.mad.action)
-  m <- median(x, na.rm=TRUE)
-  x.mad <- rep(two.sided.mad[1], length(x))
-  x.mad[x > m] <- two.sided.mad[2]
-  mad.distance <- (x - m) / x.mad
-  mad.distance[x==m] <- 0
-  return(mad.distance)
-}
-#---------------------------------------------------------------#
-#---------------------------------------------------------------#
-
-
-
-
-shifterFunc <- function(df, COLUMN)
+bringToBoundary <- function(pointVec, center, covmat, mh.dist.max)
 {
-  
-  #df will have three cols c("DW_INSTRUMENT_ID", COLUMN , outlflagCol)
-  outlflagCol <- "OUTL"
-  
-  #base case(not outliers)
-  if(sum(df[[outlflagCol]] == TRUE) == 0)
-  {
-    return(df[[COLUMN]])
-  }
-  
-  nonoutl <- df[df[[outlflagCol]] == FALSE, COLUMN]
-  s       <- summary(nonoutl)
-  q1 <- s[2]; 
-  q3 <- s[5];
-  med <- s[3];
-  
-  #....outls...minNonOutl..1Q...med..2Q..MaxNonOutl..outliers
-  minNonOutL <- min(df[ df[[outlflagCol]] == FALSE , COLUMN])
-  maxNonOutL <- max(df[ df[[outlflagCol]] == FALSE , COLUMN])
-  
-  minOutL <- min(df[ df[[outlflagCol]] == TRUE , COLUMN], na.rm = TRUE)
-  maxOutL <- max(df[ df[[outlflagCol]] == TRUE , COLUMN], na.rm = TRUE)
-  
-  
-  lowdEndIdx  <- (!is.na(df[,COLUMN]) & (df[,COLUMN] < minNonOutL))
-  if(sum(lowdEndIdx) > 0)
-  {
-    lowEndOutls <- df[ lowdEndIdx , COLUMN]
-    #(lowEndOutls - minNonOutL)/(minOutL - minNonOutL) = (newValLowEnd - q1)/(maxNonOutL - q1)
-    #this means
-    newValLowEnd = q1 + ((lowEndOutls - minNonOutL)/(minOutL - minNonOutL)) * (maxNonOutL - q1)
-    df[ lowdEndIdx , COLUMN] <- newValLowEnd
-  }
-  
-  
-  highEndIdx <- ((!is.na(df[,COLUMN])) & df[,COLUMN] > maxNonOutL)
-  if(sum(highEndIdx) > 0)
-  {
-    highEndOutls <- df[highEndIdx, COLUMN]
-    #(highEndOutls - maxNonOutL)/(maxOutL - maxNonOutL) = (newValHighEnd - q3)/(maxNonOutL - q3)
-    #this means
-    newValHighEnd = q3 + ((highEndOutls - maxNonOutL)/(maxOutL - maxNonOutL)) * (maxNonOutL - q3)
-    df[highEndIdx, COLUMN] <- newValHighEnd
-  }
-  
-  return(df[[COLUMN]])
+  eps <- 1e-10
+   mhcurr    <- mahalanobis(x = pointVec, center = center, cov = covmat)
+
+   helper.f <- function(lambda)
+   {
+     pnew  = lambda* matrix(center, nrow=1) + (1-lambda) * pointVec
+     mahalanobis(x = pnew, center = center, cov = covmat) - mh.dist.max
+   }
+
+   lambda1  <- 1
+   lambda2  <- 0
+   lambdaNew <- 1
+   
+   while(1)
+   {
+     print(sprintf("lamda1=%s, lambda2=%s, cost=%s",lambda1,lambda2,helper.f(lambdaNew)))
+       if(abs(helper.f(lambdaNew)) < eps)
+       {
+         break
+       }
+       
+       lambdaNew = 0.5 * (lambda1 + lambda2)
+       if( helper.f(lambdaNew) * helper.f(lambda1) < 0)
+       {
+         lambda2  = lambda1
+         lambda1  = lambdaNew
+       } else if (helper.f(lambdaNew) * helper.f(lambda2) < 0){
+         lambda1  = lambda2
+         lambda2  = lambdaNew
+       } 
+     }#while
+   
+   lambdaNew* matrix(center, nrow=1) + (1-lambdaNew) * pointVec
 }
+   
 
 
+head(datf.new)
 
-absMadOutLier <- function(lb, ub)
-{
-  function(madDist)
-  {
-    which(madDist < lb | madDist > ub)
-  }
-}
-dat[["mad"]]  <- New_DoubleMADsFromMedian(dat$x)
-flaggingFunction = absMadOutLier(-5,5)
-dat[["OUTL"]] <- FALSE
-outl.idx <- flaggingFunction(dat[["mad"]])
-dat[["OUTL"]][outl.idx] <- TRUE
+moved <- data.frame(t(apply(datf.new[datf.new$OUTL == TRUE,1:dimension],1, 
+                function(vec){
+                              bringToBoundary(pointVec = matrix(vec, nrow = 1), center, covmat, mh.dist.max)
+                              })))
+names(moved) <- c("x", "y")
+moved[["TYPE"]] = "MOVED"
+orig.and.moved <- datf.new[datf.new$OUTL == TRUE, 1:dimension]
+orig.and.moved[["TYPE"]] = "OLD"
+orig.and.moved <- rbind(orig.and.moved,moved )
 
-shifterFunc(dat, COLUMN = "x")
-
-
-
-
-
+ggplot(orig.and.moved, aes(x=x, y=y, color = TYPE)) + geom_point(shape=1)
