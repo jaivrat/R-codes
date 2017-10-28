@@ -1,6 +1,7 @@
 ---
-title: "LinearDiscriminantAnalysis-LDA"
+title: "Linear/Quadratic DiscriminantAnalysis"
 output: pdf_document
+author: Jai Vrat Singh
 ---
 
 ```{r setup, include=FALSE}
@@ -9,18 +10,12 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## R Markdown
 
-We try to test linear discvriminant analysis using our own generated data. We will have two data sets with labels A and B with different means and common variance.
-
-```{r cars}
+We try to test linear discriminant analysis using our own generated data. We will have two data sets with labels A and B with different means and common variance.
 
 
-```
+First generate two Multivariate normals with different means and variances.
 
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r, echo=FALSE}
+```{r, echo=TRUE}
 
 getTransformMatrix <- function(covMat)
 {
@@ -79,7 +74,21 @@ bindedDat[["categ"]] = bindedDat$type == 1
 
 #--------------------  generate data --------------------------------#
 
+```
 
+Data had been generated and stored in data.frame bindedDat.
+
+```{r}
+head(bindedDat)
+
+tail(bindedDat)
+
+dim(bindedDat)
+```
+
+The data looks like:
+
+```{r}
 
 library(ggplot2)
 ggplot(bindedDat, aes(x=x, y=y, color=type)) + geom_point(shape=1) + 
@@ -88,7 +97,11 @@ ggplot(bindedDat, aes(x=x, y=y, color=type)) + geom_point(shape=1) +
 
 ```
 
-#Logistic Regression
+
+We try fitting in different models, where dependent variable is the **type** and expanatory variables are ** x **  and ** y **.
+
+
+## 1. Logistic Regression
 
 ```{r}
 library(caTools)
@@ -129,7 +142,7 @@ auc
 
 
 
-## Linear Discriminant Analysis
+##2. Linear Discriminant Analysis
 
 ```{r}
 library(MASS)
@@ -148,7 +161,7 @@ auc
 ```
 
 
-# Quadratic Discriminant Analysis
+##3. Quadratic Discriminant Analysis
 
 ```{r}
 qda.fit = qda(categ ~ x + y , data=train)
@@ -201,7 +214,6 @@ ggplot( rbind( bindedDat[,c("x", "y", "type")],
 
 
 ```
-
 
 
 

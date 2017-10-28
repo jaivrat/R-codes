@@ -1,4 +1,6 @@
 
+library(ggplot2)
+
 #------------------- Function to generate correlated normals(Spectral Transform) -------------------#
 getTransformMatrix <- function(covMat)
 {
@@ -34,7 +36,7 @@ datf.o <- data.frame(x = result[1,], y = result[2,], "ORIG" = FALSE)
 datf <-     rbind(datf,
                   datf.o)
 
-ggplot(datf, aes(x=x, y=y, color="green")) + geom_point(shape=1) + 
+ggplot(datf, aes(x=x, y=y)) + geom_point(shape=1) + 
   geom_smooth(method=lm,   # Add linear regression lines
               se=FALSE)    # Don't add shaded confidence region
 
