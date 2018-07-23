@@ -1,0 +1,152 @@
+---
+title: "Ridge And Lasso Regressions"
+author: "Jai Vrat Singh"
+date: "23/07/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+Data used in this example can be downloaded from kaggle: https://www.kaggle.com/c/boston-housing
+
+For myself, I have temporarily saved it into /Users/jvsingh/.kaggle/competitions/boston-housing using the kaggle api.
+
+## Ridge Regression
+
+```{r}
+filename="/Users/jvsingh/.kaggle/competitions/boston-housing/train.csv"
+df = read.csv(file = filename, header = TRUE, stringsAsFactors = FALSE)
+#uppercase columns
+colnames(df) <- toupper(colnames(df))
+head(df)
+```
+
+
+```{r}
+#we do not need ID
+df[["ID"]] = NULL
+head(df)
+```
+
+```{r}
+X = df[,colnames(df)[-length(colnames(df))]]
+Y = df[,length(colnames(df))]
+
+```
+
+### Ridge Model
+
+```{r}
+#Ridge Model Fit 
+library(glmnet)
+ridge.mod = glmnet(x = as.matrix(X), y=Y, alpha=0, lambda = 0.1)
+coef(ridge.mod)
+```
+
+```{r}
+predict (ridge.mod, s=1, type = "coefficients")
+```
+```{r}
+#Prediction from API
+predictions = predict (ridge.mod, s=1,newx = as.matrix(X))
+
+#Prediction manually
+thetas = as.matrix(predict (ridge.mod, s=1, type = "coefficients"))
+predvals = cbind(rep(1,dim(X)[1]), as.matrix(X)) %*% thetas
+
+#These values should be same
+assertthat::are_equal(sum(abs(predictions - predvals)),0.0)
+```
+#### Let us analyze errors
+
+```{r}
+library(ggplot2)
+# Histogram overlaid with kernel density curve
+ggplot(data.frame(errors = as.numeric(Y - predictions)), aes(x=errors))  + 
+    geom_histogram(aes(y=..density..),      # Histogram with density instead of count on y-axis
+                   binwidth=.5,
+                   colour="black", fill="white") +
+    geom_density(alpha=.2, fill="#FF6666")  # Overlay with transparent density plot
+```
+
+
+
+
+```{r}
+#Let us produce ridge coefficients with different alphas
+loglambdas = seq(from = -10, to = 20, length.out = 50)
+lambdas    = exp(loglambdas)
+
+RidgeCoeffs <- function(lambda){
+  ridge.mod = glmnet(x = as.matrix(X), y=Y, alpha=0, lambda = lambda)
+  as.matrix(coef(ridge.mod))
+}
+
+coeffsList = as.data.frame(t(sapply(lambdas, function(lambda) RidgeCoeffs(lambda))))
+
+#prepare column names
+colnames(coeffsList) = c("bias", colnames(df)[-length(colnames(df))]) 
+coeffsDF = coeffsList
+coeffsDF["loglambdas"] = loglambdas
+head(coeffsDF)
+```
+```{r}
+#plotting
+library(reshape2)
+coeffsDF[["bias"]] = NULL #Remove bias
+coeffsDF.melt = melt(coeffsDF, id.vars = "loglambdas")
+colnames(coeffsDF.melt) <- c("loglambdas", "variable", "coefficient")
+
+ggplot(data=coeffsDF.melt, aes(x=loglambdas, y=coefficient, group=variable, colour=variable)) +
+    geom_line() +
+    ggtitle("Ridge Regression")
+```
+
+## LASSO Regression
+
+
+```{r}
+#Let us produce lasso coefficients with different alphas
+
+LassoCoeffs <- function(lambda){
+  mod = glmnet(x = as.matrix(X), y=Y, alpha=1, lambda = lambda)
+  as.matrix(coef(mod))
+}
+coeffsList = as.data.frame(t(sapply(lambdas, function(lambda) LassoCoeffs(lambda))))
+
+#prepare column names
+colnames(coeffsList) = c("bias", colnames(df)[-length(colnames(df))]) 
+coeffsDF = coeffsList
+coeffsDF["loglambdas"] = loglambdas
+head(coeffsDF)
+```
+
+```{r}
+#plotting
+coeffsDF[["bias"]] = NULL #Remove bias
+coeffsDF.melt = melt(coeffsDF, id.vars = "loglambdas")
+colnames(coeffsDF.melt) <- c("loglambdas", "variable", "coefficient")
+
+ggplot(data=coeffsDF.melt, aes(x=loglambdas, y=coefficient, group=variable, colour=variable)) +
+    geom_line() +
+    ggtitle("Lasso Regression")
+```
+
+
+As we see above, the Lasso converges faster to zero as expected with increasing regularization penalty
+
+As seen below, both ridge and lasso have same estimates and equal to that of Linear Regression if we use the regularization paramater 0, i.e lambda=0
+
+```{r}
+ridge.mod = glmnet(x = as.matrix(X), y=Y, alpha=0, lambda = 0)
+#as.matrix(t(coef(ridge.mod)))
+lasso.mod = glmnet(x = as.matrix(X), y=Y, alpha=1, lambda = 0)
+#as.matrix(t(coef(lasso.mod)))
+reg.mod <- lm(MEDV ~ ., data = df)
+#coef(reg.mod)
+rbind(as.matrix(t(coef(ridge.mod))), as.matrix(t(coef(lasso.mod))), coef(reg.mod))
+```
