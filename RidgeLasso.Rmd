@@ -2,7 +2,9 @@
 title: "Ridge And Lasso Regressions"
 author: "Jai Vrat Singh"
 date: "23/07/2018"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
