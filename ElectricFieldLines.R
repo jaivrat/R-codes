@@ -52,7 +52,7 @@ bisection <- function(a,b, angle)
   obj   = tan(angle)
   
   if( (tan(b) - obj) * (tan(a) - obj) > 0)
-    stop("Wrong choice of intervals")
+      stop("Wrong choice of intervals")
   
   if(tan(a) == obj)
   {
@@ -89,10 +89,16 @@ bisection <- function(a,b, angle)
 
 
 #angle = pi/3
-getFieldPoints <- function(angle)
+getFieldPoints <- function(angle, lengthLimit=0)
 {
   #At this point angle is 60
-  theta = bisection(0, pi/2, angle)
+  theta = NULL
+  if(angle < pi/2){
+    theta = bisection(0, pi/2, angle)
+  } else {
+    theta = bisection(pi/2, pi, angle)
+  }
+  
   print(sprintf("getFieldPoints: Angle = %s", theta * 180/pi))
   x0 = R * cos(theta)
   y0 = R * sin(theta)
@@ -113,21 +119,28 @@ getFieldPoints <- function(angle)
   
   CheckEntry <- function(x,y)
   {
-    ((x - D)^2 + (y -0)^2 < R*R) || (x >= D + 30*R)
+    ((x - D)^2 + (y -0)^2 < R*R) || (x >= D + 30*R || x <= (0 - 30*R)) || (y >= 2*D || y <= -2*D)
   }
   
-  getPoints <- function(x0,y0)
+  getPoints <- function(x0,y0,lengthLimit=0)
   {
     entered = FALSE
     x = x0; y = y0;
     df <- data.frame(x=x0,y=y0)
+    L  <- 0
+    
     while(!entered)
     {
       print(sprintf("getPoints(angle=%s): X=%s, Y=%s\n", round(angle*180/pi,2), x,y))
       pt <- getNewCord(x,y)
       df <- rbind(df,c(pt[1], pt[2]))
+      entered = CheckEntry(pt[1], pt[2])
+      if(lengthLimit>0)
+      {
+        L <- L + sqrt((x-pt[1])^2 + (y-pt[2])^2)
+        entered = entered || (L >= lengthLimit)
+      }
       x = pt[1]; y = pt[2]
-      entered = CheckEntry(x, y)
     }
     df
   }
@@ -141,14 +154,25 @@ getFieldPoints <- function(angle)
 
 
 dataDF <- rbind(getFieldPoints(0),
-                getFieldPoints(pi/6),
-                getFieldPoints(pi/4),
-                getFieldPoints(pi/3))
+                getFieldPoints(1* pi/12),
+                getFieldPoints(2* pi/12),
+                getFieldPoints(3* pi/12),
+                getFieldPoints(4* pi/12),
+                getFieldPoints(5* pi/12),
+                getFieldPoints(6* pi/12),
+                getFieldPoints(7* pi/12),
+                getFieldPoints(8* pi/12),
+                getFieldPoints(9 * pi/12),
+                getFieldPoints(10* pi/12),
+                getFieldPoints(11* pi/12),
+                getFieldPoints(11* pi/12))
 
 # Extend the regression lines beyond the domain of the data
 ggplot(dataDF, aes(x=x, y=y, color=TYPE)) + geom_point(shape=1) +
   scale_colour_hue(l=50)  # Use a slightly darker palette than normal
 
+#debug
+getFieldPoints(6* pi/12)
 
 #add another circle
 getCircle <- function(radius, center)
@@ -179,11 +203,15 @@ ggplot(allDF, aes(x=x, y=y, color=TYPE)) + geom_point(shape='....') +
 
 #Specifically for 60deg : When charge equal
 #debug(getFieldPoints)
-df60 <- getFieldPoints(pi/4)
-lastpoint <- df60[dim(df60)[1],]
+df45 <- getFieldPoints(pi/4)
+firstPoint <- df45[1,]
+fields <- E(firstPoint$x,firstPoint$y, Q1, Q2)
+atan(abs(fields$E_y/fields$E_x)) * 180/pi
+
+fields <- E(lastpoint$x,lastpoint$y, Q1, Q2)
+lastpoint <- df45[dim(df45)[1],]
 fields <- E(lastpoint$x,lastpoint$y, Q1, Q2)
 atan(abs(fields$E_y/fields$E_x)) * 180/pi
 
-# Extend the regression lines beyond the domain of the data
-ggplot(df60, aes(x=x, y=y, color=TYPE)) + geom_point(shape='....') +
-  scale_colour_hue(l=50)   # Use a slightly darker palette than normal
+
+
