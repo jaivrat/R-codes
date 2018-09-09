@@ -1,0 +1,87 @@
+---
+title: "ICA"
+author: "Jai Vrat Singh"
+date: "06/07/2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+** Independent Component Analysis **
+
+* Assume that two individual components are mixed by the followgin matrix
+
+
+$\begin{bmatrix}
+   A_0 
+\end{bmatrix}
+=
+\begin{bmatrix}
+    2 & 3 \\
+    2 & 1 
+\end{bmatrix}$
+
+
+that is
+
+$\begin{bmatrix}
+    x_1 \\
+    x_2 
+\end{bmatrix}
+=
+\begin{bmatrix}
+    2 & 3 \\
+    2 & 1 
+\end{bmatrix}\begin{bmatrix}
+    s_1 \\
+    s_2 
+\end{bmatrix}$
+
+
+
+```{r cars}
+set.seed(144)
+N = 10000
+dat <- data.frame(s1 = runif(N) - 0.5, s2 = runif(N) - 0.5)
+head(dat)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r, echo=FALSE}
+library(ggplot2)
+ggplot(dat, aes(x=s1, y=s2)) +
+    geom_point(size=0.5)      # Use hollow circles
+```
+
+
+
+```{r}
+#Mixture or transformation matrix
+A <- rbind(c(2,3),
+           c(2,1))
+dat.m <- as.matrix(dat)
+dim(dat.m)
+
+head(dat.m)
+
+# X = (x1, x2)
+X = A %*% t(dat.m)
+dat.tr = as.data.frame(t(X))
+colnames(dat.tr) <- c("x1", "x2")
+
+ggplot(dat.tr, aes(x=x1, y=x2)) +
+    geom_point(size=0.5) +     # Use hollow circles
+    geom_abline(intercept = 1, slope = A[1,1]/A[2,1], color="red") +    #I calculated this 1
+    geom_abline(intercept = -2/3, slope = A[2,2]/A[1,2], color="green") #I Calculated this -2/3
+
+```
+
+Now the variables are not independent. Also note that the slopes of two edge lines are nothing but column vectors of the A matrix
+
