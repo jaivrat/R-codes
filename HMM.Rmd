@@ -62,9 +62,11 @@ Similarly element[1,2] represents $E_1=L$, $E_2=L$ and $X_2 = A$.
 
 \begin{equation}\label{xx}
 \begin{split}
-element[1,2]& =P(E_1=L, E_2=L, X_2 = A)\\
+element[1,2]\\
+& = P(E_1=L, E_2=L, X_2 = A)\\
 & = P(E_1=L, E_2=L, X_1 = A, X_2 = A) + P(E_1=L, E_2=L, X_1 = B, X_2 = A) \\
-& = P(X_1 = A)*P(E_2=L| X_1=A)* P(X_2 = A|X1 = A) * P(E_2 = L| X_2 = A) + P(X_1 = A)*P(E_2=L| X_1=B)* P(X_2 = A|X1 = B) * P(E_2 = L| X_2 = A) \\
+& = P(X_1 = A)*P(E_2=L| X_1=A)* P(X_2 = A|X1 = A) * P(E_2 = L| X_2 = A) \\
+&   + P(X_1 = A)*P(E_2=L| X_1=B)* P(X_2 = A|X1 = B) * P(E_2 = L| X_2 = A) \\
 & = 0.5 * 0.6 * 0.8 * 0.6 + 0.5 * 0.4 * 0.2 * 0.6 \\
 & = 0.168
 \end{split}
