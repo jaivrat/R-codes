@@ -1,0 +1,179 @@
+---
+title: "Arch-garch-modelling"
+author: "Jai Vrat Singh"
+date: "11/09/2018"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(fGarch)
+```
+
+## R Markdown
+
+
+```{r cars}
+ret.what  <- list(date=numeric(), returns=numeric())
+ret.widths <- c(12, 8)
+strip.white <- c(TRUE, TRUE)
+
+datF = scan(file = "http://faculty.chicagobooth.edu/ruey.tsay/teaching/fts2/m-3m4603.txt",
+             what = ret.what, strip.white = strip.white)
+datF = as.data.frame(datF)
+
+
+#Above are simple returns, Convert returns to logReturns
+datF[["logRet"]] = log(1- datF$returns)
+
+head(datF)
+```
+
+## Evidence of ARCH effect
+
+
+```{r}
+plot(datF$logRet, type = "o", pch = ".")
+```
+
+This plot reflects a pattern around the line logRet = 0, We need to look into ACF and PACF to get lagged correlations and its exact nature before the ARCH effect can be detected.
+
+
+```{r}
+par(mfrow=c(2,1))
+acf(datF$logRet)
+acf(datF$logRet, type = "partial")
+```
+
+
+ACF till lags 12 => MA(12)
+PACF till 3, 12 => AR(3), AR(12)
+
+Try these
+
+```{r}
+#AR(12)
+logret.fit = arima(x = datF$logRet, order = c(12,0,0))
+logret.fit
+#aic = -1779.14
+
+#AR(3)
+logret.fit = arima(x = datF$logRet, order = c(3,0,0))
+logret.fit
+#aic = -1781.7
+
+#MA(12)
+logret.fit = arima(x = datF$logRet, order = c(0,0,12))
+logret.fit
+#aic = -1780.48
+
+```
+
+Lowest AIC is for AR(3) => seems it is best fit
+
+## Residue analysis of above fit
+
+```{r}
+#logret.fit$residuals
+qqnormPlot(logret.fit$residuals)
+```
+```{r}
+acf(logret.fit$residuals, lag.max = 20)
+
+```
+
+```{r}
+acf(logret.fit$residuals, type = "partial", lag.max = 20)
+```
+
+
+
+Trying various models and Residual analysis, seems that MA(12) is the best fit model.
+
+```{r}
+lags <- c(1:20)
+sapply(lags, FUN = function(lag) {
+                    test <- Box.test(logret.fit$residuals, lag = lag, type = c("Box-Pierce", "Ljung-Box"), fitdf = 0)
+                    test$p.value
+})
+```
+
+P-values are very high => the residual is white noise.
+
+## ARCH effect on residuals
+
+```{r}
+par(mfrow=c(2,2))
+acf(logret.fit$residuals, lag.max = 20)
+pacf(logret.fit$residuals, lag.max = 20)
+acf(logret.fit$residuals^2, lag.max = 20)
+pacf(logret.fit$residuals^2, lag.max = 20)
+```
+
+ACF and PACF of residuals clearly show conditional heteroscedasticity
+
+Let us do LB test on residuals^2
+
+```{r}
+lags <- c(1:20)
+sapply(lags, FUN = function(lag) {
+                    test <- Box.test(logret.fit$residuals^2, lag = lag, type = c("Box-Pierce", "Ljung-Box"), fitdf = 0)
+                    test$p.value
+})
+```
+
+P-values are less than 0.05 => means that shocks are not independent. There is ARCH effect in almost all the lags.
+
+
+## PACF of squared log returns
+
+```{r}
+pacf(datF$logRet^2, lag.max = 20)
+```
+
+Seems and ARCH(2) model can be fitted
+
+$r_t = \mu + a_t$
+
+$a_t = \sigma_t \epsilon_t$
+
+$\sigma_t^2 = \alpha_0 + \alpha_1 a_{t-1}^2 + \alpha_2 a_{t-2}^2$
+
+Fit the Model
+
+```{r}
+library(fGarch)
+garch2.fit <- garchFit(~garch(2,0), data = datF$logRet, trace = FALSE)
+garch2.fit
+```
+
+$\mu = -0.0169129$
+
+$\alpha_0 = \omega = 0.0035752$
+
+$\alpha_1 = 0.1125097$
+
+$\alpha_2 = 0.0985089$
+
+So the Model is:
+
+$r_t = -0.0169129 + a_t$
+
+$\sigma_t^2 =  0.0035752 + 0.1125097 a_{t-1}^2 + 0.0985089 a_{t-2}^2$
+
+$a_t = \sigma_t \epsilon_t$
+
+```{r}
+resid <- residuals(garch2.fit)
+par(mfrow=c(2,1))
+acf(resid, lag.max = 20)
+pacf(resid, lag.max = 20)
+```
+```{r}
+qqnormPlot(resid)
+```
+
+
