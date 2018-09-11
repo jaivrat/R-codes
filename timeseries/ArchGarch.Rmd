@@ -1,22 +1,24 @@
 ---
-title: "Arch-garch-modelling"
+title: "Volatility Modeling - ARCH/GARCH"
 author: "Jai Vrat Singh"
 date: "11/09/2018"
 output:
-  html_document: default
   pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
 library(fGarch)
+library(reshape2)
+library(ggplot2)
 ```
 
 ## R Markdown
 
 
-```{r cars}
+```{r}
 ret.what  <- list(date=numeric(), returns=numeric())
 ret.widths <- c(12, 8)
 strip.white <- c(TRUE, TRUE)
@@ -43,8 +45,8 @@ This plot reflects a pattern around the line logRet = 0, We need to look into AC
 
 
 ```{r}
-par(mfrow=c(2,1))
-acf(datF$logRet)
+#par(mfrow=c(2,1))
+acf(datF$logRet,)
 acf(datF$logRet, type = "partial")
 ```
 
@@ -172,8 +174,201 @@ par(mfrow=c(2,1))
 acf(resid, lag.max = 20)
 pacf(resid, lag.max = 20)
 ```
+
 ```{r}
 qqnormPlot(resid)
 ```
 
 
+## Prediction
+
+```{r}
+#predic.val <- predict(garch2.fit, 5)
+predVal = fGarch::predict(garch2.fit, 10)
+
+temp.dat <- data.frame("steps" = c(1:dim(predVal)[1]), vals = predVal$meanForecast, 
+                       lb = predVal$meanForecast - predVal$standardDeviation,
+                       ub = predVal$meanForecast + predVal$standardDeviation)
+temp.dat.melt = melt(temp.dat, id.vars = "steps")
+
+ggplot(data=temp.dat.melt, aes(x=steps, y=value, group=variable, colour=variable)) +
+    geom_line()+
+   ggtitle("Predictions")+
+  xlab("Steps")
+
+#Predict Next 5 steps of SD
+ggplot(data=predVal[1:5,], aes(x =  c(1:dim(predVal)[1])[1:5], y=standardDeviation)) +
+    geom_line() + 
+    ggtitle("Next 5 steps of SD") + 
+    xlab("Steps")
+```
+
+
+## Bulding ARCH/GARCH model on S&P composite index
+
+```{r}
+ret.what  <- list(date=numeric(), gm=numeric(), sp=numeric())
+ret.widths <- c(12, 25-13, 34-25)
+strip.white <- c(TRUE, TRUE, TRUE)
+
+datSP = scan(file = "./data/d-gmsp9303.txt", what = ret.what, strip.white = strip.white)
+datSP = as.data.frame(datSP)
+
+head(datSP)
+```
+
+
+### Graphically look for ARCH effect
+```{r}
+plot(datSP$sp, type="o", pch=".")
+acf(datSP$sp)
+pacf(datSP$sp)
+acf(datSP$sp^2)
+pacf(datSP$sp^2)
+```
+
+ The ACF plot shows almost no serial correlations but the squared series show significant autocorrelations.
+ 
+ Let us do auto correlations tests on few lags.
+ 
+```{r}
+lags <- c(1:20)
+sapply(lags, FUN = function(lag) {
+                    test <- Box.test(datSP$sp^2, lag = lag, type = "Ljung-Box", fitdf = 0)
+                    test$p.value
+})
+```
+ 
+The p-values are almost 0, this means we can reject the Null hypothesis that series are uncorrelated or independent.
+
+Since serial correlations are present we need to fit the mean equation first and then apply ARCH test of residues.
+
+
+```{r}
+#ARMA
+arima6.6.fit = arima(x = datSP$sp, order = c(6,0,6))
+arima6.6.fit
+
+arima5.5.fit = arima(x = datSP$sp, order = c(5,0,5))
+arima5.5.fit
+#aic = -17138.35
+
+arima4.4.fit = arima(x = datSP$sp, order = c(4,0,4))
+arima4.4.fit
+#Fails with Nan
+
+arima2.2.fit = arima(x = datSP$sp, order = c(2,0,2))
+arima2.2.fit
+#aic = -17127.73
+
+ar6.fit = arima(x = datSP$sp, order = c(6,0,0))
+ar6.fit
+#aic = -17128.48
+
+ar5.fit = arima(x = datSP$sp, order = c(5,0,0))
+ar5.fit
+#aic = -17129.32
+
+```
+
+We pick ARMA(5,5) model for lowest AIC values
+
+```{r}
+
+arima5.5.fit = arima(x = datSP$sp, order = c(5,0,5))
+
+lags <- c(1:20)
+pvals <- sapply(lags, FUN = function(lag) {
+                    test <- Box.test(arima5.5.fit$residuals, lag = lag, type =  "Ljung-Box", fitdf = 0)
+                    test$p.value
+})
+plot(x=lags, y = pvals)
+
+#ACF/PACF
+acf(arima5.5.fit$residuals)
+pacf(arima5.5.fit$residuals)
+```
+
+So the residuals are not autocorrelated. 
+
+ARCH test on residual squared:
+
+
+```{r}
+lags <- c(1:20)
+pvals <- sapply(lags, FUN = function(lag) {
+                    test <- Box.test(arima5.5.fit$residuals^2, lag = lag, type =  "Ljung-Box", fitdf = 0)
+                    test$p.value
+})
+plot(x=lags, y = pvals)
+
+#ACF/PACF
+acf(arima5.5.fit$residuals^2)
+pacf(arima5.5.fit$residuals^2)
+
+```
+
+So there is autocorrelation in residues.
+
+
+To build a garch model , we do a joint max likelohood estimation with AR(5). Not that AARMA(5,5) does not converge/gives NaNs
+
+```{r}
+#garch55.fit <- garchFit(~garch(5,5), data = datSP$sp, trace = FALSE)
+#garch55.fit
+
+library(rugarch)
+
+spec <- ugarchspec(variance.model = list(model = "sGARCH", 
+                                         garchOrder = c(1, 1), 
+                                         submodel = NULL, 
+                                         external.regressors = NULL, 
+                                         variance.targeting = FALSE), 
+
+                   mean.model     = list(armaOrder = c(5, 0), 
+                                         external.regressors = NULL, 
+                                         distribution.model = "norm", 
+                                         start.pars = list(), 
+                                         fixed.pars = list()))
+
+garch.ar5.fit <- ugarchfit(spec = spec, data = datSP$sp, solver.control = list(trace=0))
+
+#garch.ar5.fit <- garchFit(formula = ~garch(2,1), data = datSP$sp, trace = FALSE)
+garch.ar5.fit
+```
+
+All coefficients are significantly different from 0
+
+```{r}
+resid <- residuals(garch.ar5.fit)
+lags <- c(1:10)
+pvals <- sapply(lags, FUN = function(lag) {
+                    test <- Box.test(resid, lag = lag, type =  "Ljung-Box", fitdf = 0)
+                    test$p.value
+})
+plot(x=lags, y = pvals)
+abline(h = 0.05)
+
+#ACF/PACF
+acf(resid, lag.max = 10)
+pacf(resid, lag.max = 10)
+```
+```{r}
+predVal = ugarchforecast(garch.ar5.fit,n.ahead=10,data=datSP$sp)
+
+#predVal@forecast$seriesFor
+#predVal@forecast$sigmaFor
+
+oldPlusForeCast <- c(datSP$sp, predVal@forecast$seriesFor)
+ub              <- c(datSP$sp, predVal@forecast$seriesFor + predVal@forecast$sigmaFor)
+lb              <- c(datSP$sp, predVal@forecast$seriesFor - predVal@forecast$sigmaFor)
+temp.dat <- data.frame(x = 1:length(oldPlusForeCast) , vals = oldPlusForeCast,  lb = lb, ub=ub)
+
+#Last 30 + 10 projected means and theor bounds
+temp.dat.melt = melt(tail(temp.dat,50), id.vars = "x")
+
+ggplot(data=temp.dat.melt, aes(x=x, y=value, group=variable, colour=variable)) +
+    geom_line()+
+   ggtitle("Current + Pred")+
+  xlab("x")
+```
