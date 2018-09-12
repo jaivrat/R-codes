@@ -1,10 +1,10 @@
 ---
 title: "Volatility Modeling - ARCH/GARCH"
 author: "Jai Vrat Singh"
-date: "11/09/2018"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
 output:
-  pdf_document: default
   html_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -211,6 +211,7 @@ ret.what  <- list(date=numeric(), gm=numeric(), sp=numeric())
 ret.widths <- c(12, 25-13, 34-25)
 strip.white <- c(TRUE, TRUE, TRUE)
 
+#I have downloaded this file: http://faculty.chicagobooth.edu/ruey.tsay/teaching/bs41202/sp2004/d-gmsp9303.txt
 datSP = scan(file = "./data/d-gmsp9303.txt", what = ret.what, strip.white = strip.white)
 datSP = as.data.frame(datSP)
 
