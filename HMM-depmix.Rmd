@@ -1,0 +1,142 @@
+---
+title: "HMM-depmix"
+author: Jai Vrat Singh
+output:
+  pdf_document: default
+  html_document: default
+---
+
+Let us generate data for training and see if depmix can uncover the pattern
+
+some references:
+https://eeecon.uibk.ac.at/psychoco/2011/slides/Visser_hdt.pdf
+
+https://quantstrattrader.wordpress.com/2016/10/05/the-problem-with-depmix-with-online-prediction/
+
+https://www.quantstart.com/articles/hidden-markov-models-for-regime-detection-using-r
+
+https://cran.r-project.org/web/packages/depmixS4/depmixS4.pdf
+
+
+```{r setup, include=FALSE}
+
+set.seed(1)
+#transition matrix
+A <- rbind(c(0.95, 0.05),
+           c(0.10, 0.90))
+#> A
+#    S1  S2
+#S1 0.8 0.2
+#S2 0.3 0.7
+
+getNextState <- function(current, A)
+{
+  trans.row <- A[current, ]
+   min(which(runif(1) <= cumsum(trans.row)))
+}
+
+numStates <- dim(A)[1]
+initProb  <- matrix(runif(numStates), ncol= numStates)
+initProb  <- initProb/sum(initProb)
+
+#NormDist on states
+emissions <- list( list("mu" = -1, "sd" = 2), 
+                   list("mu" =  2, "sd" = 4))
+
+
+getInitState <- function(initProb)
+{
+   x <- runif(1); 
+   min(which(x <= cumsum(initProb)))
+}
+
+numdata = 1000
+state   = getInitState(initProb)
+obs     <- rnorm(n = 1, mean = emissions[[state]]$mu, sd = emissions[[state]]$sd)
+datList <- list()
+datList[[1]]    <- setNames(c(state, obs), c("state" , "obs"))
+for(i in 2:numdata)
+{
+  state <- getNextState(state, A)
+  obs   <-  rnorm(n = 1, mean = emissions[[state]]$mu, sd = emissions[[state]]$sd)
+  datList[[i]] <- setNames(c(state, obs), c("state" , "obs"))
+}
+
+#str(datList)
+
+datF <- data.frame(do.call(rbind, datList))
+```
+
+## HMM fitting using depmix
+
+Try fitting now..
+
+```{r}
+
+library(depmixS4)
+
+hmm <- depmix(obs~1, family = gaussian(), nstates = 2, data = datF)
+hmmfit <- fit(hmm)
+
+#the first column has the viterbi states, the other columns have the 
+# delta probabilities, see Rabiner (1989) 
+post   <- hmmfit@posterior 
+post2  <- posterior(hmmfit)
+#> head(post)
+#  state         S1        S2
+#1     2 0.00000000 1.0000000
+#2     2 0.08230401 0.9176960
+
+#Must be TRUE as they are same
+identical(post, post2)
+
+#
+head(datF)
+
+library(ggplot2)
+library(reshape2)
+temp <- data.frame("idx" = 1:dim(datF)[1],"state" = datF$state, "category" = "actual")
+head(temp)
+temp <- rbind( temp,
+               data.frame("idx" = 1:dim(post)[1], "state" = post$state, "category" = "viterbi"))
+
+# Map  to color
+ggplot(data=temp, aes(x=idx, y=state, group=category, colour=category)) +
+    geom_line() +
+  ggtitle("Actual and Viterbi(most likely states)")
+
+```
+
+####  Response
+
+```{r}
+hmmfit@response
+
+#mean
+hmmfit@response[[1]][[1]]@parameters$coefficients
+#2.047001
+#sd
+hmmfit@response[[1]][[1]]@parameters$sd
+#3.989855
+
+#mean
+hmmfit@response[[2]][[1]]@parameters$coefficients
+#-0.9999505 
+#sd
+hmmfit@response[[2]][[1]]@parameters$sd
+#1.986069
+
+```
+
+We can see that Model is able to uncover the states in graph. Let us plot probabilities.
+
+```{r}
+
+temp <- data.frame("idx"= 1:dim(post)[1], post[,2:3])
+temp.melt <- melt(temp, id.vars = "idx")
+colnames(temp.melt) <- c("idx", "state", "probability")
+# Map  to color
+ggplot(data=temp.melt, aes(x=idx, y=probability, group=state, colour=state)) +
+    geom_line() +
+  ggtitle("posterior probabilities")
+```
