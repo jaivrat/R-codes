@@ -6,15 +6,26 @@ d
 # mean-adjusted values 
 d$x_adj = d$x - mean(d$x)
 d$y_adj = d$y - mean(d$y)
-
+d
 
 # calculate covariance matrix and eigenvectors/values
 (cm = cov(d[,1:2]))
 (e = eigen(cm))
 
+#----- Check
+#Egen vectors are reported as columns of matrix e$vectors
+# First -> e$vectors[,1], second e$vectors[,2]
+cm %*% e$vectors[,1]
+e$values[1] * e$vectors[,1]
+
+cm %*% e$vectors[,2]
+e$values[2] * e$vectors[,2]
+#------
+
+
 # principal component vector slopes
-s1 = e$vectors[1,1] / e$vectors[2,1] # PC1
-s2 = e$vectors[1,2] / e$vectors[2,2] # PC2
+s1 = e$vectors[2,1] / e$vectors[1,1] # PC1
+s2 = e$vectors[2,2] / e$vectors[1,2] # PC2
 
 plot(d$x_adj, d$y_adj, asp=T, pch=16, xlab='x', ylab='y')
 abline(a=0, b=s1, col='red')
@@ -23,7 +34,7 @@ abline(a=0, b=s2)
 # PCA data = rowFeatureVector (transposed eigenvectors) * RowDataAdjust (mean adjusted, also transposed)
 feat_vec = t(e$vectors)
 row_data_adj = t(d[,3:4])
-final_data = data.frame(t(feat_vec %*% row_data_adj)) # ?matmult for details
+final_data   = data.frame(t(feat_vec %*% row_data_adj)) # ?matmult for details
 names(final_data) = c('x','y')
 
 
@@ -42,3 +53,4 @@ abline(a=0, b=s1, col='red')
 abline(a=0, b=s2)
 points(compOnE1, asp=T, pch=16, col='red')
 points(compOnE2, asp=T, pch=16, col='green')
+s
