@@ -140,3 +140,241 @@ ggplot(data=temp.melt, aes(x=idx, y=probability, group=state, colour=state)) +
     geom_line() +
   ggtitle("posterior probabilities")
 ```
+
+### Download S& P 500 data
+
+```{r}
+
+library("quantmod")
+rm(list=ls())
+#getSymbols('SPX', from = '1950-01-01', src='yahoo', adjust = TRUE)
+#SPX <- na.omit(Ad(SPX))
+#spxlevel <- na.omit(Ad(SPX))
+SPX <- getSymbols("^GSPC",auto.assign = FALSE, from = "1980-01-01")
+spxlevel <- na.omit(Ad(SPX))
+spxRets  <- quantmod::allReturns(spxlevel)
+
+weekly  <- as.data.frame(na.omit(spxRets[,"weekly"]))
+dates   <- as.Date(rownames(weekly), "%Y-%m-%d")
+week.df <- data.frame("dates" = dates, "returns" = weekly$weekly)
+
+spxlevel.df <- as.data.frame(spxlevel)
+spxlevel.df[["dates"]] <- as.Date(rownames(spxlevel.df), "%Y-%m-%d")
+
+
+week.df[["act.lvl"]] <- spxlevel.df[ match(week.df$dates, spxlevel.df$dates, nomatch = NA), "GSPC.Adjusted"]
+#"lvl" = cumprod(1 + weekly$weekly)
+
+#some plots on returns and cumulative levels
+ggplot(data = week.df, aes(x = dates, y = returns )) + 
+  geom_line() + 
+  geom_point()
+
+ggplot(data = week.df, aes(x = dates, y = act.lvl )) + 
+  geom_line() +
+  ggtitle("S&P500 Adj.")
+
+
+```
+
+
+```{r}
+require(depmixS4)
+
+startTest <- ceiling(0.60 * nrow(week.df))
+train.df  <- week.df[1:startTest, ]
+
+
+hmm    <- depmix(returns ~ 1, family = gaussian(), nstates = 2, data=train.df)
+hmmfit <- fit(hmm, verbose = FALSE)
+hmmfit
+
+hmmfit@response
+hmmfit@transition
+```
+
+```{r}
+#the first column has the viterbi states, the other columns have the # delta probabilities, see Rabiner (1989)
+post   <- hmmfit@posterior
+
+temp <- data.frame("dates" = train.df$dates,
+                   "state" = post$state, 
+                   "category" = "viterbi", 
+                   act.lvl = train.df$act.lvl, "returns" = train.df$returns) 
+head(temp)
+
+# Map to color
+ggplot(data=temp, aes(x=dates, y=act.lvl, colour=state)) + 
+  geom_line() +
+  ggtitle("Viterbi(most likely states)")
+
+
+ggplot(data=temp, aes(x=dates, y=act.lvl)) + 
+  geom_line() +
+  geom_point(aes(colour = factor(state))) +
+  ggtitle("Viterbi(most likely states)") 
+  
+```
+
+```{r}
+
+ggplot(data=temp, aes(x=dates, y=returns)) + 
+  geom_line() +
+  geom_point(aes(colour = factor(state))) +
+  ggtitle("Returns") 
+
+
+tail(train.df)
+
+
+```
+
+As expected highly volatile state seems to associated with factor 2.
+
+```{r}
+
+gaussians <- summary(hmmfit)
+gaussians
+
+trans.mat <- rbind(hmmfit@transition[[1]]@parameters$coefficients, hmmfit@transition[[2]]@parameters$coefficients)
+trans.mat
+
+objGen <- function(gauss, trans)
+{
+  gauss_ <- gauss
+  trans_ <- trans
+  
+  expectedReturn <- function(currState)
+  {
+    row <- trans_[currState, ]
+    p1  <- row[1]
+    p2  <- row[2]
+    p1 * gauss_[1,1] + p2 * gauss_[2,1]
+  }
+  
+  expectedVar <- function(currState)
+  {
+    row <- trans_[currState, ]
+    p1  <- row[1]
+    p2  <- row[2]
+    p1*p1* gauss_[1,2]^2 + p2 * gauss_[2,2]^2
+  }
+  
+  list("expectedReturn" = expectedReturn, "expectedVar" = expectedVar)
+}
+
+statsGenerator <- objGen(gauss = gaussians, trans = trans.mat)
+
+```
+
+```{r}
+
+set.seed(1)
+startDate <- week.df[ceiling(dim(week.df)[1] * 0.5), "dates"]
+
+getPredsForDate <- function(nextDate, futureRetAvailable=TRUE)
+{
+  #---------------------------------------------------------
+  nextDate = as.Date(nextDate)
+  tmp.train.df <- week.df[week.df$dates <nextDate, ]
+  hmm <- depmix(returns~1, family = gaussian(), nstates = 2, data = tmp.train.df)
+  
+  #---------------------------------------------------------
+  hmmfit <- fit(hmm, verbose=FALSE)
+  gaussians <- summary(hmmfit)
+  trans.mat <- rbind(hmmfit@transition[[1]]@parameters$coefficients, hmmfit@transition[[2]]@parameters$coefficients)
+  statsGenerator <- objGen(gauss = gaussians, trans = trans.mat)
+  
+  post.tmp = hmmfit@posterior
+  current_state = post.tmp[dim(post.tmp)[1],1]
+  exp.ret <- statsGenerator$expectedReturn(currState = current_state)
+  exp.var <- statsGenerator$expectedVar(currState = current_state)
+  exp.sd <- sqrt(exp.var)
+  exp.ret.lb <-  exp.ret - exp.sd
+  exp.ret.ub <-  exp.ret + exp.sd
+  curr.lvl <- tmp.train.df[dim(tmp.train.df)[1], "act.lvl"]
+  exp.lvl  <-  curr.lvl * ( 1 + exp.ret)
+  exp.lvl.ub <- curr.lvl * ( 1 + exp.ret.ub)
+  exp.lvl.lb <- curr.lvl * ( 1 + exp.ret.lb)
+  
+  act.ret <- NA
+  act.lvl <- NA
+  if(futureRetAvailable){
+    act.ret <- week.df[week.df$dates == nextDate, "returns"]
+    act.lvl <- week.df[week.df$dates == nextDate, "act.lvl"]
+  }
+    
+  print(sprintf("Date=%s, realised ret = %s, exp.ret=%s, exp.var=%s", nextDate, act.ret, exp.ret, exp.var))
+  
+  res <- setNames(c(exp.ret.lb,    
+                    exp.ret,   
+                    exp.ret.ub,   
+                    exp.var,   
+                    act.ret, 
+                    exp.lvl.lb, 
+                    exp.lvl, 
+                    exp.lvl.ub,
+                    act.lvl),
+                  c("exp.ret.lb", 
+                    "exp.ret", 
+                    "exp.ret.ub", 
+                    "exp.var", 
+                    "act.ret", 
+                    "exp.lvl.lb", 
+                    "exp.lvl", 
+                    "exp.lvl.ub",
+                    "act.lvl"))
+  res
+}
+
+res <- sapply(week.df$dates[week.df$dates > startDate] , getPredsForDate)
+resDF <- as.data.frame(t(as.matrix(res)))
+resDF[["dates"]] <-  week.df$dates[week.df$dates > startDate]
+```
+
+```{r}
+
+resDF.melt <- melt(resDF[, c("dates", "exp.ret", "exp.ret.lb", "exp.ret.ub", "act.ret")], id.vars = "dates")
+
+
+ggplot(data=resDF.melt, aes(x=dates, y=value, group=variable, colour=variable)) +
+    geom_line() +
+    geom_point()
+
+
+```
+```{r}
+
+resDF.lvl.melt <- melt(resDF[, c("dates", "exp.lvl", "exp.lvl.lb", "exp.lvl.ub", "act.lvl")], id.vars = "dates")
+
+
+ggplot(data=resDF.lvl.melt, aes(x=dates, y=value, group=variable, colour=variable)) +
+    geom_line() +
+    ggtitle("S&P - Expected level, LB and UB and actual")
+
+
+```
+
+```{r}
+ggplot(data=resDF.melt[resDF.melt$dates > '2015-01-01',], aes(x=dates, y=value, group=variable, colour=variable)) +
+    geom_line() +
+    geom_point()
+
+```
+```{r}
+ggplot(data=resDF.lvl.melt[resDF.lvl.melt$dates > '2015-01-01',], aes(x=dates, y=value, group=variable, colour=variable)) +
+    geom_line() +
+  ggtitle("S&P - Expected level, LB and UB and actual")
+  
+
+```
+
+Next prediction
+```{r}
+pred <- getPredsForDate(as.Date('2018-10-26'), futureRetAvailable = FALSE)
+
+setNames( c( pred["exp.ret"] - sqrt(pred["exp.ret"]), pred["exp.ret"] , pred["exp.ret"] + sqrt(pred["exp.ret"]))
+          , c("exp.ret.lb", "exp.ret", "exp.ret.ub"))
+
+
+```

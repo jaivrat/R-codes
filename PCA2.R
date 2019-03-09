@@ -70,8 +70,8 @@ ggplot(data = pca.data, aes(x = X, y = Y, label=Sample)) +
   ggtitle("My PCA graph")
 
 #if we talke original data series and take dot product of each row on PC1 pf rotation, we will get 
-projections = data.matrix %*% pca$rotation
-head(projections)
+projections.unscaled = data.matrix %*% pca$rotation
+head(projections.unscaled)
 head(pca$x) #This matches with above if scale=FALSE, center = FALSE in prcomp. or data.matrix not scaled(cetered + scaled)
 
 
@@ -89,3 +89,74 @@ head(projections.sc)
 head(pca$x)
 
 
+
+
+#########################################################################
+# USING SVD
+# svd output: 
+# svd output is 3 matrix : U D V  s.t  data matrix = A = U D V' 
+# U supposed to be eigenvector of AA', 
+# D the diagonal mat ofeigenvalues
+# V supposed to be eigenvector of A'A 
+#########################################################################
+#d	:a vector containing the singular values of x, of length min(n, p), sorted decreasingly.
+#u	:a matrix whose columns contain the left singular vectors of x, present if nu > 0. Dimension c(n, nu).
+#v	:a matrix whose columns contain the right singular vectors of x, present if nv > 0. Dimension c(p, nv).
+
+res.svd <- svd(data.matrix)
+#res.svd$u %*% diag(res.svd$d) %*% t(res.svd$v)  should be same as data.matrix
+#Let us verify
+sum(apply(res.svd$u %*% diag(res.svd$d) %*% t(res.svd$v) - data.matrix, 1, function(e) sum(e^2)))
+
+#if A be data matrix (m x n), U supposed to be eigenvector of AA'
+#eigen(data.matrix %*% t(data.matrix))$vectors to be same as res.svd$u
+#So, the SVD result and eigen vector result must be parallel (dot product should 1 or -1 here)
+aat <- data.matrix %*% t(data.matrix)
+sum(eigen(aat)$vectors[,1] * res.svd$u[,1])
+sum(eigen(aat)$vectors[,2] * res.svd$u[,2])
+#similarly for v
+ata <- t(data.matrix) %*% data.matrix
+sum(eigen(ata)$vectors[,1] * res.svd$v[,1])
+sum(eigen(ata)$vectors[,2] * res.svd$v[,2])
+
+#Eigen values from AA' or A'A will be squared of svd
+# This result will be almost 0
+eigen(ata)$value  - (res.svd$d)^2  #Note that while taking variance we need to do res.svd$d ^2 before
+
+#A = UDV' => AV = UD   => it means individually A * v[,i] = d[i] * u[,i] 
+#ie. V is like rotation matrix : THe below must all be 0
+summary(data.matrix %*% res.svd$v[,1]  - res.svd$d[1] * res.svd$u[,1])
+
+#Find components:  data * rotation, ie AV is new projection.
+head(data.matrix %*% res.svd$v)
+head(projections.unscaled)
+# Or AV -> UD is new projection. AV is actual full projection
+# if we want top reduce dimension, then we can drop the dimestions
+# from d matrix to get projection
+head(res.svd$u %*% diag(res.svd$d))
+
+#If we want projections to mxn data to mxk, where k < n ie dimension reduction,
+# we can take first 
+svd.vars <- eigen(ata)$value
+svd.cum.vars <- cumsum(svd.vars)/sum(svd.vars) #%variation
+svd.cum.vars
+#[1] 0.9966629 1.0000000
+#We see above that 99% variation is explained by first component, => k = 1
+#So, we can take first k (k=1) components of UD as PC components
+k = 1 #in this case
+pccomps <- res.svd$u %*% diag(res.svd$d)[,1:k, drop=FALSE]
+head(pccomps) #ie first column of head(res.svd$u %*% diag(res.svd$d))
+
+
+#Suppose we are given components, say pccomps above, how do we get back the original data (with some)
+# We will definitely need rotation matrix
+# AV = UD, so this means UD is GIVEN, we recover A from equation AV = GIVEN, ie A = GIVEN * V' 
+n = dim(data.matrix)[2]
+recovered = cbind(pccomps, rep(0, ncol=n-k)) %*% t(res.svd$v)
+colnames(recovered) <- c("x","y")
+head(recovered)
+head(data.matrix)
+
+#Plot to have a look 
+tmp <- rbind(data.frame(recovered, label= "recovered"), data.frame(data.matrix,label= "original" ))
+ggplot(tmp, aes(x=x, y=y, color=label)) + geom_point()

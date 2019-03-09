@@ -12,7 +12,7 @@ d
 (cm = cov(d[,1:2]))
 (e = eigen(cm))
 
-#----- Check
+#----- Checks
 #Egen vectors are reported as columns of matrix e$vectors
 # First -> e$vectors[,1], second e$vectors[,2]
 cm %*% e$vectors[,1]
@@ -32,19 +32,19 @@ abline(a=0, b=s1, col='red')
 abline(a=0, b=s2)
 
 # PCA data = rowFeatureVector (transposed eigenvectors) * RowDataAdjust (mean adjusted, also transposed)
-feat_vec = t(e$vectors)
-row_data_adj = t(d[,3:4])
-final_data   = data.frame(t(feat_vec %*% row_data_adj)) # ?matmult for details
+final_data   = data.frame(as.matrix(d[,3:4]) %*% e$vectors)
 names(final_data) = c('x','y')
 
 
 plot(final_data, asp=T, xlab='PCA 1', ylab='PCA 2', pch=16)
 
 #First principal component v(dot product)e1, second component v(dot product)e1
-as.matrix(d[,3:4]) %*% e$vectors[,1, drop = FALSE] #these are componnet on line e1
+as.matrix(d[,3:4]) %*% e$vectors[,1, drop = FALSE] #these are componnet on line e1 (ACTUAL COMPONENT)
+#but we want to draw projections (red and green points)
+#so we multiply with vector e$vectors[,1, drop = FALSE] before to get the projections
 compOnE1 <- e$vectors[,1, drop = FALSE] %*% t(as.matrix(d[,3:4]) %*% e$vectors[,1, drop = FALSE])
 compOnE1 <- data.frame(t(compOnE1))
-
+#Similarly projection on E2
 compOnE2 <- e$vectors[,2, drop = FALSE] %*% t(as.matrix(d[,3:4]) %*% e$vectors[,2, drop = FALSE])
 compOnE2 <- data.frame(t(compOnE2))
 
@@ -53,4 +53,32 @@ abline(a=0, b=s1, col='red')
 abline(a=0, b=s2)
 points(compOnE1, asp=T, pch=16, col='red')
 points(compOnE2, asp=T, pch=16, col='green')
-s
+
+#================================= SVD =========================================+#
+svd.res <- svd(d[,1:2])
+e$values
+e$vectors
+
+# A = UDV'
+# U : eigen vectors of AA'  and V: eigen vectors of A'A
+# D = diag(sqrt eigenvalues of A'A)
+aat = as.matrix(d[,1:2]) %*% t(as.matrix(d[,1:2]))
+aat.eig <- eigen(aat)
+aat.eig$values[abs(aat.eig$values) < 1e-10] <- 0
+expected.D = sqrt(aat.eig$values)
+expected.U = ata.eig$vectors
+#seems it is slightl;y different from e$vectors
+#Slopes must match
+expected.U[2,1]/expected.U[1,1] - s1
+expected.U[2,2]/expected.U[1,2]
+
+
+#A'A
+ata.eig   =  eigen( t(as.matrix(d[,1:2])) %*% as.matrix(d[,1:2]))
+(expected.D.new = sqrt(aat.eig$values))
+expected.V.new = ata.eig$vectors
+expected.V.new
+
+eigen(t(as.matrix(d[,1:2])) %*% as.matrix(d[,1:2]))
+
+
