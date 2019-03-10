@@ -139,5 +139,20 @@ mean(lasso_predict==testset$diabetes)
 
 
 
+#------------------- DONE ------------------------------------#
+betas <- as.matrix(coef(cv.out,s=cv.out$lambda.1se))[-2,] #Intercept occurs twice ?
+
+#Just curious, let us try predicting manually
+xs <- x_test[1,]
+z <- sum(betas * x)
+1/(1 + exp(-z))
+#[1] 0.5144841
+lasso_prob[1]
+#[1] 0.5144841
+
+#! GOOD above matches
+
+
+
 
 
