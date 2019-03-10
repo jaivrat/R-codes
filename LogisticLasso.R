@@ -117,6 +117,25 @@ coef(cv.out,s=cv.out$lambda.1se)
 
 
 
+#Test alog on out of sample data
+#get test data
+x_test <- model.matrix(diabetes~.,testset) #adds intercept and removes dependant variable
+
+#predict class, type="class"
+lasso_prob <- predict(cv.out,newx = x_test,s=cv.out$lambda.1se,type="response")
+
+#translate probabilities to predictions
+lasso_predict <- rep("neg",nrow(testset))
+lasso_predict[lasso_prob>.5] <- "pos"
+
+#confusion matrix
+table(pred=lasso_predict,true=testset$diabetes)
+#pred  neg pos
+#neg 94 28
+#pos  4 27
+#accuracy
+mean(lasso_predict==testset$diabetes)
+#[1] 0.7908497
 
 
 
