@@ -1,0 +1,29 @@
+# https://stats.stackexchange.com/questions/240455/fitting-exponential-regression-model-by-mle
+beta0 <- 0.001; beta1 <- -0.2
+beta0 <- -0.01; beta1 <- -0.10
+beta0 <- 0.02; beta1 <- 0.50
+xs    <- seq(from = -1, to = 1, length.out = 1000)
+set.seed(100)
+lambdas <- exp(- (beta0 + beta1 * xs + rnorm(1000)/100))
+obs     <- sapply(lambdas, function(lambda_i) rexp(1, rate = lambda_i))
+plot(x = xs, y = obs)
+datf <- data.frame(obs = obs, x = xs)
+fit  <- glm(obs ~ ., data = datf, family = Gamma(link="log"))
+#fit  <- glm(obs ~ ., data = datf, family = Gamma())
+s    <- summary(fit, dispersion = 1)
+s$coefficients
+
+predictions <- predict(fit, datf,  type = "response")
+dat.res <- rbind(data.frame("xs" = xs, y  = obs, category = "in"),
+                 data.frame("xs" = xs, y  = predictions, category = "out"))
+ggplot(dat.res, aes(x=xs, y = y , color=category)) + geom_point()
+
+#manual prediction
+s$coefficients["(Intercept)", 1]
+s$coefficients["x", 1]
+manual.res <- apply(datf, 1, function(in.dat)
+               {
+                 val <- s$coefficients["(Intercept)", 1] + s$coefficients["x", 1] * in.dat[2] #as [1] is obs and [2] is x
+                 one_by_lambda <- exp(val)
+                 one_by_lambda #is the expected value of exponential distribution
+               })
