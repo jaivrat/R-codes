@@ -11,7 +11,7 @@ rm(list=ls())
 set.seed(100)
 df <- data.frame(x1 = sample(seq(from = -1.0, by = 0.01, length.out = 1000), 
                                size = 1000, replace = FALSE),
-                   x2 = sample(seq(from = -3.0, by = 0.01, length.out = 1000), 
+                 x2 = sample(seq(from = -3.0, by = 0.01, length.out = 1000), 
                                size = 1000, replace = FALSE))
 
 theta1 <- 0.4
@@ -114,3 +114,22 @@ ggplot(data = results.y.df.melt, aes(x = tim, y = value, group = variable, colou
 library(ggpubr)
 ggqqplot(res.fwd.filt$f - df$y[-(1:500)])
 plot(res.fwd.filt$f, df$y[-(1:500)])
+
+head(residuals(res.fwd.filt, type = "raw")$res)
+head(res.fwd.filt$f - df$y[-(1:500)])
+
+head(scale(residuals(res.fwd.filt, type = "raw")$res))
+head(scale(res.fwd.filt$f - df$y[-(1:500)]))
+
+head(residuals(res.fwd.filt, type = "standardized")$res)
+head((res.fwd.filt$f - df$y[-(1:500)])/sd(res.fwd.filt$f - df$y[-(1:500)]))
+
+sd(res.fwd.filt$f - df$y[-(1:500)])
+residuals(res.fwd.filt)$sd
+with(res.fwd.filt, dlmSvd2var(U.R[[500]], D.R[500,]))
+
+
+#what is sd term , and how it is related to the filter above
+tail(residuals(res.fwd.filt)$sd, 1)^2
+tail(res.fwd.filt$mod$X, 1) %*% with(res.fwd.filt, dlmSvd2var(U.R[[500]], D.R[500,])) %*% t(tail(res.fwd.filt$mod$X, 1)) + res.fwd.filt$mod$V
+
