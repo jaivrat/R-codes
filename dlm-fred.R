@@ -68,7 +68,7 @@ my.dlmForecast <- function(m.start, C.start, G, fut.FF, W, V, k.steps)
 }
 
 i.start.period =0
-j.span.periods =2
+j.span.periods =1
 adj.xts <- calculateAdjustedReturns(in.ret.xts = sp.log.ret.xts,
                                     i.start.period = i.start.period,
                                     j.span.periods = j.span.periods)
@@ -179,4 +179,8 @@ res.filt.all   <- dlm::dlmFilter(y = dat.xts$shifted.ret, mod = ret.mod.all)
 #   Because result.xts uses two period old theta to predit 2 period later theta
 tail(res.filt.all$f)
 tail(result.xts$f)
+
+tail(residuals(res.filt.all)$sd)
+tail(sqrt(result.xts$Q))
+
 
