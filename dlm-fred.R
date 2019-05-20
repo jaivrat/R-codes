@@ -68,7 +68,7 @@ my.dlmForecast <- function(m.start, C.start, G, fut.FF, W, V, k.steps)
 }
 
 i.start.period =0
-j.span.periods =1
+j.span.periods =2
 adj.xts <- calculateAdjustedReturns(in.ret.xts = sp.log.ret.xts,
                                     i.start.period = i.start.period,
                                     j.span.periods = j.span.periods)
@@ -76,9 +76,10 @@ adj.xts <- calculateAdjustedReturns(in.ret.xts = sp.log.ret.xts,
 #--lets apply
 dat.xts <- merge(other.dat.xts, adj.xts)
 dat.xts <- dat.xts[, c("RPI", "W875RX1", "shifted.ret")]
-tail(dat.xts, 10)
-tail(other.dat.xts[,1:2], 10)
-tail(sp.price.xts)
+dat.xts <- dat.xts[-1, ] #First is NA
+#tail(dat.xts, 10)
+#tail(other.dat.xts[,1:2], 10)
+#tail(sp.price.xts)
 #dat.xts <- dat.xts[complete.cases(dat.xts),]
 dat.mle <- dat.xts["1900/1998"]
 
@@ -116,7 +117,6 @@ curr.date <- as.Date(index(dat.test))[1]
 getPred.RealScenario <- function(curr.date)
 {
   dat.filt.xts <- dat.xts[paste("1900", "/" , as.character(curr.date), sep= "")]
-  dat.filt.xts <- dat.filt.xts[-1,] #First ret is NA
   i.plus.j     <- i.start.period  + j.span.periods
   
   #Complete realised y's in this
@@ -162,3 +162,21 @@ plot.xts(result.xts$Q)
 tmp <- merge.xts(dat.xts$shifted.ret, result.xts$f)
 plot.xts(tmp)
 plot.xts(tmp[,1] - tmp[,2])
+
+#Other Check - if we directly run filter on all the data and see last values
+ret.mod.all <- dlm::dlmModReg(X = as.matrix(dat.xts[,1:2]),
+                              dV = V(mod.res), 
+                              dW = diag(W(mod.res)),
+                              m0 = rep(0, 2),
+                              C0 = diag(1e7, 2),
+                              addInt = FALSE)
+res.filt.all   <- dlm::dlmFilter(y = dat.xts$shifted.ret, mod = ret.mod.all)
+
+
+#When i=0, j = 1. Do not expect difference here:
+#   Because both cases use same theta to determine the one-step forecast.
+#When i=0, j = 2. Expect difference here. 
+#   Because result.xts uses two period old theta to predit 2 period later theta
+tail(res.filt.all$f)
+tail(result.xts$f)
+
