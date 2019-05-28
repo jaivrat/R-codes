@@ -37,7 +37,7 @@ getABSMaxDDN <- function(mu, sd, horizon)
 N   = 100000; mu  = 1; sig = 1; horizon = 1
 library(parallel)
 cl <- makeCluster(4)
-clusterExport(cl, "getABSMaxDDN", "mu", "sig", "horizon")
+clusterExport(cl, c("getABSMaxDDN", "mu", "sig", "horizon"))
 ddns <- parallel::parSapply(cl, 1:N, function(i) {
                       library(xts)
                       getABSMaxDDN(mu = mu, sd = sig, horizon = horizon)
