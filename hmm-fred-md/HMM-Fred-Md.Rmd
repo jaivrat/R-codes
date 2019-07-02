@@ -1,0 +1,176 @@
+---
+title: "HMM-Fred-md"
+author: "Jai Vrat Singh"
+date: "02/07/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r warning=FALSE, message=FALSE}
+library(xts)
+library(PerformanceAnalytics)
+library(tseries)
+library(forecast)
+```
+
+Set working directory
+
+```{r}
+setwd("~/work/github/R-codes/hmm-fred-md")
+
+direct.df <- read.csv(file = "2019-04.csv", header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
+direct.df <- direct.df[-1, ] #The first row is transform etc..
+
+#Date is in month/date/year format
+direct.df$sasdate <- as.Date(direct.df$sasdate, "%m/%d/%Y")
+
+#get into time series as it will be earier to work with
+direct.df.xts <- xts(direct.df[,-1], direct.df$sasdate)
+
+#Replace missing values by the latest observation. Please note that there may be missing values in "real" decision scenarios which may not be 
+#caught by one time experiment. ie in case if we are doing real backtests
+direct.df.xts <- zoo::na.locf(direct.df.xts)
+```
+
+
+```{r}
+plot.xts(direct.df.xts, legend.loc = "bottomright")
+```
+
+As seen from the plot many series seem to ne non-stationary. We need to check for seasonality as well.
+
+
+##### Let us calculate S&P Returns 
+```{r}
+sp500.ret <- PerformanceAnalytics::Return.calculate(direct.df.xts$`S&P 500`, method = "log")
+plot.xts(sp500.ret, legend.loc = "topleft")
+```
+
+We Add another spread based measure/feature to this data set based on 
+https://www.newyorkfed.org/medialibrary/media/research/current_issues/ci12-5.pdf
+
+```{r}
+bondEqv <- function(discount)
+{
+  100 * ( 365 * discount/100)/(360 - 91* discount/100)
+}
+temp.xts <- direct.df.xts$GS10 - bondEqv(as.numeric(direct.df.xts$TB3MS))
+
+old.names <- names(direct.df.xts)
+direct.df.xts <- merge.xts(direct.df.xts, temp.xts, all = TRUE, check.names = FALSE)
+names(direct.df.xts) <- c(old.names, "GS10_minus_TB3MS")
+```
+
+
+#### Restrict our analysis and feature production purely on train data, ie data till 1996. We should not see anything beyond.
+Ideally it should be done on test data only. Because we will apply all these results on completely unseen data.
+
+```{r}
+test.direct.df.xts <- direct.df.xts["1997/"]
+direct.df.xts      <- direct.df.xts["/2018"]
+```
+
+
+
+
+#### Checks for stationarity
+````{r}
+check.p.val.for.lag <- function(k)
+{
+  #alternative = c("stationary"
+  pvalues <- sapply(direct.df.xts, function(in.ts) tseries::adf.test(in.ts[!is.na(in.ts)], k = k)$p.value)
+  #if p.vale is less than 0.05, then we reject H0 ie reject that series is non-stationary, and conclude that it is stationary
+  ifelse(pvalues < 0.05, "S", "N")
+}
+
+#lags 
+lags = 0:30
+res  <- suppressWarnings(sapply(lags, function(k) check.p.val.for.lag(k)))
+stat.result.direct.df <- data.frame(lags = lags, t(res), check.names = FALSE)
+````
+
+
+```{r}
+#Stationary ones with 0 lag
+print("Stationary:")
+names(stat.result.direct.df[1,-1])[ stat.result.direct.df[1,-1] == "S"]
+#Non Stationary
+print("Non Stationary")
+names(stat.result.direct.df[1,-1])[ stat.result.direct.df[1,-1] == "N"]
+```
+
+
+
+#### Some Checks on seasonality
+
+```{r}
+#Will be error here as data is seasonally adjusted
+#plot(decompose(direct.df.xts$RPI))
+
+is.seasonlity <- sapply(names(direct.df.xts), function(name)
+                                              {
+                                                res <- try(stl(direct.df.xts[, name], s.window = "periodic"), silent = TRUE) 
+                                                #we do not want to print error
+                                                ifelse(class(res) == "try-error", FALSE, TRUE)
+                                              })
+if(sum(is.seasonlity) > 0)
+{
+  seasonals <- names(is.seasonlity)[is.seasonlity == TRUE]
+  stop(sprintf("These are seasonal ones %s", paste(seasonals, sep= ":", collapse = ":")))
+}
+```
+
+
+
+#### Find differencings to make it stationary 
+(**Independt tests on data till 1996 and another till 2018 suggest different lags => this means model needs to be recalibrated after a few years**)
+```{r}
+ndiffs.suggested <- sapply(direct.df.xts, function(ts.this) forecast::ndiffs(ts.this[!is.na(ts.this)], alpha = 0.05, max.d = 10))
+ndiffs.suggested.file <- "ndiffs.suggested.df.csv"
+write.csv(data.frame("name" = names(ndiffs.suggested) , "lag" = as.numeric(ndiffs.suggested)), ndiffs.suggested.file, row.names = FALSE)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
