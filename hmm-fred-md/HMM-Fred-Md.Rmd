@@ -2,7 +2,9 @@
 title: "HMM-Fred-md"
 author: "Jai Vrat Singh"
 date: "02/07/2019"
-output: pdf_document
+output:
+  html_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -15,6 +17,9 @@ library(xts)
 library(PerformanceAnalytics)
 library(tseries)
 library(forecast)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
 ```
 
 Set working directory
@@ -71,7 +76,7 @@ Ideally it should be done on test data only. Because we will apply all these res
 
 ```{r}
 test.direct.df.xts <- direct.df.xts["1997/"]
-direct.df.xts      <- direct.df.xts["/2018"]
+direct.df.xts      <- direct.df.xts["/1997"]
 ```
 
 
@@ -131,28 +136,106 @@ if(sum(is.seasonlity) > 0)
 ```{r}
 ndiffs.suggested <- sapply(direct.df.xts, function(ts.this) forecast::ndiffs(ts.this[!is.na(ts.this)], alpha = 0.05, max.d = 10))
 ndiffs.suggested.file <- "ndiffs.suggested.df.csv"
-write.csv(data.frame("name" = names(ndiffs.suggested) , "lag" = as.numeric(ndiffs.suggested)), ndiffs.suggested.file, row.names = FALSE)
+ndiffs.suggested.df <- data.frame("name" = names(ndiffs.suggested) , "lag" = as.numeric(ndiffs.suggested))
+write.csv(ndiffs.suggested.df, ndiffs.suggested.file, row.names = FALSE)
 ```
 
 
 
+```{r}
+ndiffs.suggested.df %>%
+            kable() %>%
+            kable_styling()
+```
+
+#### Construct stationary series
+
+Make data series stationary. There is  doubt what what to do first, stationarizing or anomaly detection. I think stationarizing first is better as there are not many outliers. Stationarity suggestion is based on overall data, in which outlier will not have any influence. Further differencing sugested will automatically help detect outliers. For simplicity we will not remove outlier but repace them with corresspoding bounds.
+
+```{r}
+
+stationarised.res <- sapply(direct.df.xts, function(this.ts){
+                                              lag <- ndiffs.suggested[as.character(names(this.ts))]
+                                              #
+                                              if(lag == 0){ #no transformation needed
+                                                return(this.ts)
+                                              } else {
+                                                return(diff(this.ts, lag))
+                                              }
+                                           }, simplify = FALSE)
+
+#Merge this into a stationarised xts object
+stationarised.res.xts <- stationarised.res[[1]]
+for(i in 2:length(stationarised.res))
+{
+  stationarised.res.xts <- merge.xts(stationarised.res.xts, stationarised.res[[i]], check.names = FALSE)
+}
+
+names(stationarised.res.xts) <- names(direct.df.xts)
+
+```
+
+*** There are a few series such as NONBORRES which are too voltile after 2008 ***
+
+```{r}
+plot.xts(direct.df.xts$NONBORRES)
+```
+
+Check later if stationarising worked. (TBD). You can do so by taking recommended lags and doing adf test
+
+tseries::adf.test(stationarised.res.xts$RPI[!is.na(stationarised.res.xts$RPI)])
+
+```{r}
+#Write stationarised data to a file
+write.zoo(stationarised.res.xts, file = "stationarised.res.xts.csv", row.names = FALSE)
+```
 
 
+There are lots of NA's, top 4 rows have lots of NA's. Lets remove them first
+```{r}
+stationarised.res.xts <- stationarised.res.xts[-c(1:2), ]
+```
+
+```{r}
+stationarised.res.xts.df <- data.frame("dates" = index(stationarised.res.xts), coredata(stationarised.res.xts), check.names = FALSE)
+```
 
 
+```{r}
+tmp <- sapply(stationarised.res.xts.df, function(l) sum(is.na(coredata(l))))
+ggplot(data = data.frame("variable" = names(tmp), "NAs" = as.numeric(tmp)), aes(x = variable, y = NAs)) + 
+  geom_bar(stat= "identity") + 
+  ggtitle("NUmber of NA") + 
+  theme(axis.text.x =  element_text(angle  = 90, hjust = 1, size = 6))
+```
+So there are a few columns which have lots of NA. We can drop them or impute them. Let us try imputation. Same imputation can be used for data metrics which are not avilable while rebalancing.
+
+We will use distance based imputation
+0. Identify outliers and dampen outliers
+https://www.chicagofed.org/~/media/publications/cfnai/2002/3qepart2-pdf.pdf
+
+We define an outlier to be an observation whose distance away from the median is greater than six times the interquartile range of the series. That is, $x_{it}$ - the observation at time $t$ of series $i$ is an outlier if $|x_{it} - x_{i}^{50}| > 6(x_{i}^{75} - x_{i}^{25})$,  where $x_{i}^{25}$, $x_{i}^{50}$ and $x_{i}^{75}$ are the 25th, 50th, and 75th percentiles of series $x_i$.
+
+An outlier that is above the median has its original value replaced with $x_{i}^{50} + 6 * (x_{i}^{75} - x_{i}^{25})$, while an outlier that is below the median has its original value replaced with $x_{i}^{50} - 6 * (x_{i}^{75} - x_{i}^{25})$
+
+1. We separate our data into sections - one which has all the data(S1) and other which has some NA's(S2). Then we calculate euclidean distances of each pair of rows. 
+2. for each row which has missing data, we find distances of all the rows from this reference row and populate with invesrse distance weighted value.
+
+```{r}
+#Outlier detection, let us find 25th, 50th and 75the percentile
+pctiles    <- c(0.25, 0.5, 0.75)
+pctiles.df <- data.frame("pct" = pctiles, sapply(stationarised.res.xts, function(l) quantile(l, probs = pctiles, na.rm = TRUE)), check.names = FALSE)
+write.csv(x = pctiles.df, file = "pctiles.df.csv", row.names = FALSE)
+```
 
 
-
-
-
-
-
-
-
-
-
-
-
+Replace outliers with rules as mentioned above
+```{r}
+sapply(stationarised.res.xts, function(l) {
+                                 x <-  
+  
+                              })
+```
 
 
 
