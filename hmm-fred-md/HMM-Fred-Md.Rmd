@@ -3,8 +3,8 @@ title: "HMM-Fred-md"
 author: "Jai Vrat Singh"
 date: "02/07/2019"
 output:
-  html_document: default
   pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -80,15 +80,14 @@ direct.df.xts      <- direct.df.xts["/1997"]
 ```
 
 
-
-
 #### Checks for stationarity
 ````{r}
 check.p.val.for.lag <- function(k)
 {
-  #alternative = c("stationary"
+  #alternative = "stationary"
   pvalues <- sapply(direct.df.xts, function(in.ts) tseries::adf.test(in.ts[!is.na(in.ts)], k = k)$p.value)
-  #if p.vale is less than 0.05, then we reject H0 ie reject that series is non-stationary, and conclude that it is stationary
+  #if p.vale is less than 0.05, then we reject H0 ie reject that series 
+  #is non-stationary, and conclude that it is stationary
   ifelse(pvalues < 0.05, "S", "N")
 }
 
@@ -113,12 +112,13 @@ names(stat.result.direct.df[1,-1])[ stat.result.direct.df[1,-1] == "N"]
 #### Some Checks on seasonality
 
 ```{r}
-#Will be error here as data is seasonally adjusted
+#There will be error here as data is seasonally adjusted
 #plot(decompose(direct.df.xts$RPI))
 
 is.seasonlity <- sapply(names(direct.df.xts), function(name)
                                               {
-                                                res <- try(stl(direct.df.xts[, name], s.window = "periodic"), silent = TRUE) 
+                                                res <- try(stl(direct.df.xts[, name], s.window = "periodic"),
+                                                           silent = TRUE) 
                                                 #we do not want to print error
                                                 ifelse(class(res) == "try-error", FALSE, TRUE)
                                               })
@@ -134,7 +134,11 @@ if(sum(is.seasonlity) > 0)
 #### Find differencings to make it stationary 
 (**Independt tests on data till 1996 and another till 2018 suggest different lags => this means model needs to be recalibrated after a few years**)
 ```{r}
-ndiffs.suggested <- sapply(direct.df.xts, function(ts.this) forecast::ndiffs(ts.this[!is.na(ts.this)], alpha = 0.05, max.d = 10))
+ndiffs.suggested <- sapply(direct.df.xts, function(ts.this)
+                                          {
+                                            forecast::ndiffs(ts.this[!is.na(ts.this)], alpha = 0.05, max.d = 10)
+                                          }
+                           )
 ndiffs.suggested.file <- "ndiffs.suggested.df.csv"
 ndiffs.suggested.df <- data.frame("name" = names(ndiffs.suggested) , "lag" = as.numeric(ndiffs.suggested))
 write.csv(ndiffs.suggested.df, ndiffs.suggested.file, row.names = FALSE)
@@ -165,13 +169,13 @@ stationarised.res <- sapply(direct.df.xts, function(this.ts){
                                            }, simplify = FALSE)
 
 #Merge this into a stationarised xts object
-stationarised.res.xts <- stationarised.res[[1]]
+stationarised.xts <- stationarised.res[[1]]
 for(i in 2:length(stationarised.res))
 {
-  stationarised.res.xts <- merge.xts(stationarised.res.xts, stationarised.res[[i]], check.names = FALSE)
+  stationarised.xts <- merge.xts(stationarised.xts, stationarised.res[[i]], check.names = FALSE)
 }
 
-names(stationarised.res.xts) <- names(direct.df.xts)
+names(stationarised.xts) <- names(direct.df.xts)
 
 ```
 
@@ -183,34 +187,35 @@ plot.xts(direct.df.xts$NONBORRES)
 
 Check later if stationarising worked. (TBD). You can do so by taking recommended lags and doing adf test
 
-tseries::adf.test(stationarised.res.xts$RPI[!is.na(stationarised.res.xts$RPI)])
+tseries::adf.test(stationarised.xts$RPI[!is.na(stationarised.xts$RPI)])
 
 ```{r}
 #Write stationarised data to a file
-write.zoo(stationarised.res.xts, file = "stationarised.res.xts.csv", row.names = FALSE)
+write.zoo(stationarised.xts, file = "stationarised.xts.csv", row.names = FALSE)
 ```
 
 
 There are lots of NA's, top 4 rows have lots of NA's. Lets remove them first
 ```{r}
-stationarised.res.xts <- stationarised.res.xts[-c(1:2), ]
+stationarised.xts <- stationarised.xts[-c(1:2), ]
 ```
 
 ```{r}
-stationarised.res.xts.df <- data.frame("dates" = index(stationarised.res.xts), coredata(stationarised.res.xts), check.names = FALSE)
+stationarised.xts.df <- data.frame("dates" = index(stationarised.xts), coredata(stationarised.xts), check.names = FALSE)
 ```
 
 
 ```{r}
-tmp <- sapply(stationarised.res.xts.df, function(l) sum(is.na(coredata(l))))
+tmp <- sapply(stationarised.xts.df, function(l) sum(is.na(coredata(l))))
 ggplot(data = data.frame("variable" = names(tmp), "NAs" = as.numeric(tmp)), aes(x = variable, y = NAs)) + 
   geom_bar(stat= "identity") + 
-  ggtitle("NUmber of NA") + 
+  ggtitle("Number of NA") + 
   theme(axis.text.x =  element_text(angle  = 90, hjust = 1, size = 6))
 ```
 So there are a few columns which have lots of NA. We can drop them or impute them. Let us try imputation. Same imputation can be used for data metrics which are not avilable while rebalancing.
 
-We will use distance based imputation
+We will use distance based imputation:
+
 0. Identify outliers and dampen outliers
 https://www.chicagofed.org/~/media/publications/cfnai/2002/3qepart2-pdf.pdf
 
@@ -224,23 +229,139 @@ An outlier that is above the median has its original value replaced with $x_{i}^
 ```{r}
 #Outlier detection, let us find 25th, 50th and 75the percentile
 pctiles    <- c(0.25, 0.5, 0.75)
-pctiles.df <- data.frame("pct" = pctiles, sapply(stationarised.res.xts, function(l) quantile(l, probs = pctiles, na.rm = TRUE)), check.names = FALSE)
+pctiles.df <- data.frame("pct" = pctiles, sapply(stationarised.xts, function(l) quantile(l, probs = pctiles, na.rm = TRUE)), check.names = FALSE)
 write.csv(x = pctiles.df, file = "pctiles.df.csv", row.names = FALSE)
 ```
 
 
 Replace outliers with rules as mentioned above
 ```{r}
-sapply(stationarised.res.xts, function(l) {
-                                 x <-  
-  
+outl.res <- sapply(names(stationarised.xts), function(name) 
+                              {
+                                x <-  as.numeric(stationarised.xts[, name])
+                                qtiles <- pctiles.df[, name]
+                                #IQR definition: https://www.mathwords.com/o/outlier.htm
+                                
+                                #BELOW
+                                below.outl    <- (x < qtiles[1] - 3 * (qtiles[3] - qtiles[1]))
+                                x[!is.na(x) & below.outl] <- qtiles[1] - 3 * (qtiles[3] - qtiles[1])
+                                
+                                #Above
+                                above.outl    <- (x > qtiles[1] + 3 * (qtiles[3] - qtiles[1]))
+                                x[!is.na(x) & above.outl] <- qtiles[1] + 3 * (qtiles[3] - qtiles[1])
+                                x
                               })
+
+stationarised.outl.xts <- xts(outl.res, index(stationarised.xts))
+names(stationarised.outl.xts) <- names(stationarised.xts)
+```
+
+```{r}
+#See what changes after outlier handling
+plot.xts(stationarised.xts)
+plot.xts(stationarised.outl.xts)
+```
+
+##### Means and variances of data (after outlier adjustment)
+
+```{r}
+means <- apply(stationarised.outl.xts, 2, mean, na.rm = TRUE)
+sds   <- apply(stationarised.outl.xts, 2, sd, na.rm = TRUE)
+standardization.scale <- data.frame("name" = names(means), means = means, sds = sds)
+
+#Save this to file
+write.csv(standardization.scale, "standardization.scale.csv", row.names = FALSE)
+
+#We can also do the same thing above directly in one go 
+scaled.dat <- scale(stationarised.outl.xts)
+
+#Scaled statioonarised data frame 
+scaled.stnd.df = data.frame("dates" = as.Date(index(scaled.dat)), scaled.dat, check.names = FALSE)
 ```
 
 
 
+##### Let us do the imputation
+```{r}
+#in.df <- scaled.stnd.df
+imput.fun <- function(in.df)
+{
+  
+  #Identify columns which are filled up completely ie no na's
+  res.no.na <- sapply( colnames(in.df), function(col.name)
+                                        {
+                                          vals <- in.df[[col.name]]
+                                          ifelse(any(is.na(vals)), FALSE, TRUE)
+                                        })
+  
+  #THose cols without na's
+  no.na.cols <- names(res.no.na)[res.no.na]
+  
+  #THose cols with na's
+  na.cols    <- names(res.no.na)[!res.no.na]
+  
+  df.no.na  <- in.df[, no.na.cols, drop = FALSE]
+  
+  #To process fast, let as precalculate and cache the distances of rows.
+  know.dist <<- matrix(NA, nrow = dim(df.no.na)[1],  ncol = dim(df.no.na)[1])
+  
+  idxs <- t(combn(1:dim(df.no.na)[1], 2))
+  
+  system.time( res <- apply(idxs, 1, function(idx){
+                                      row.idx1 <- idx[1]; row.idx2 = idx[2]
+                                      
+                                      know.dist2 <- know.dist[row.idx1, row.idx2]
+                                      if(!is.na(know.dist2))
+                                      {
+                                        return(know.dist2)
+                                      }
+                                      
+                                      this.point <- as.numeric(df.no.na[row.idx1, ])
+                                      row.point  <- as.numeric(df.no.na[row.idx2, ])
+                                      
+                                      know.dist2 <- sum((this.point - row.point)^2)
+                                      
+                                      know.dist[row.idx1, row.idx2] <<- know.dist2
+                                      know.dist[row.idx2, row.idx1] <<- know.dist2
+                                      return(know.dist2)
+                                    }))
+  #self distances to be 0
+  know.dist[is.na(know.dist)][] <<- 0
+  
+  for(impute.this in na.cols)
+  {
+    na.row.nums <- which(is.na(in.df[[impute.this]]))
+    
+    system.time( imputed.vals <- sapply(na.row.nums, 
+                                        function(this.row.number)
+                                        {
+                                          this.point <- df.no.na[this.row.number, ]
+                                          eucl.dist.squared <- know.dist[this.row.number, ]
+                                          spead <- sd(sqrt(eucl.dist.squared))
+                                          weights <- exp(-eucl.dist.squared/(2 * spead^2))
+                                          
+                                          avbl.values <- scaled.stnd.df[[impute.this]]
+                                          
+                                          #SHould we redo outliers
+                                          
+                                          weight.norm <- weights/sum(weights)
+                                          sum(avbl.values * weight.norm)
+                                        }))
+    in.df[na.row.nums, impute.this] <- imputed.vals
+  }
+  in.df
+}
+```
 
 
+
+#### Modelling part
+```{r}
+dates <- data.frame("dates" = scaled.stnd.df$dates)
+timing <- system.time( imputed <- imput.fun(in.df = scaled.stnd.df[,-1]))
+print(timing)
+colnames(imputed) <- colnames(scaled.stnd.df)[-1]
+```
 
 
 
