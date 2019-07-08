@@ -344,8 +344,9 @@ imput.fun <- function(in.df)
                                           
                                           #SHould we redo outliers
                                           
-                                          weight.norm <- weights/sum(weights)
-                                          sum(avbl.values * weight.norm)
+                                          not.na.idx <- !is.na(avbl.values)
+                                          weight.norm <- weights[not.na.idx]/sum(weights[not.na.idx])
+                                          sum(avbl.values[not.na.idx] * weight.norm)
                                         }))
     in.df[na.row.nums, impute.this] <- imputed.vals
   }
@@ -364,17 +365,10 @@ colnames(imputed) <- colnames(scaled.stnd.df)[-1]
 ```
 
 
-
-
-
-
-
-
-
-
-
-
-
-
+Write imputed data to file
+```{r}
+scaled.stnd.imputed.df <- data.frame("Dates" =  scaled.stnd.df$dates, imputed, check.names = FALSE)
+write.csv(scaled.stnd.imputed.df, "scaled.stnd.imputed.df.csv", row.names = FALSE)
+```
 
 
