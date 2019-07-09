@@ -38,7 +38,7 @@ direct.df.xts <- xts(direct.df[,-1], direct.df$sasdate)
 
 #Replace missing values by the latest observation. Please note that there may be missing values in "real" decision scenarios which may not be 
 #caught by one time experiment. ie in case if we are doing real backtests
-direct.df.xts <- zoo::na.locf(direct.df.xts)
+#direct.df.xts <- zoo::na.locf(direct.df.xts)
 ```
 
 
@@ -75,17 +75,37 @@ names(direct.df.xts) <- c(old.names, "GS10_minus_TB3MS")
 Ideally it should be done on test data only. Because we will apply all these results on completely unseen data.
 
 ```{r}
-test.direct.df.xts <- direct.df.xts["1997/"]
-direct.df.xts      <- direct.df.xts["/1997"]
+#Test data set
+test.df.xts <- direct.df.xts["1997/"]
+
+#Train data set
+train.df.xts       <- direct.df.xts["/1997"]
+
+#Take a bkp of full data before deleting the full data (just to be safe later that we are not fwd looking)
+direct.df.xts.bkp  <- direct.df.xts
+
+rm(direct.df.xts)
 ```
 
 
-#### Checks for stationarity
-````{r}
+#### 1. Fill the empty cells of data. 
+There are still data which are empty at the beginning. We will impute them with averaged values based on proximity later.
+
+```{r}
+#Fill the data by previous values for all the columns which are NA
+train.df.xts      <- zoo::na.locf(train.df.xts)
+```
+
+
+
+#### 2. Checks for stationarity
+
+
+```{r}
 check.p.val.for.lag <- function(k)
 {
   #alternative = "stationary"
-  pvalues <- sapply(direct.df.xts, function(in.ts) tseries::adf.test(in.ts[!is.na(in.ts)], k = k)$p.value)
+  pvalues <- sapply(train.df.xts, function(in.ts) tseries::adf.test(in.ts[!is.na(in.ts)], k = k)$p.value)
   #if p.vale is less than 0.05, then we reject H0 ie reject that series 
   #is non-stationary, and conclude that it is stationary
   ifelse(pvalues < 0.05, "S", "N")
@@ -95,18 +115,41 @@ check.p.val.for.lag <- function(k)
 lags = 0:30
 res  <- suppressWarnings(sapply(lags, function(k) check.p.val.for.lag(k)))
 stat.result.direct.df <- data.frame(lags = lags, t(res), check.names = FALSE)
-````
+```
 
+Print stationary and non stationary column names
 
 ```{r}
 #Stationary ones with 0 lag
 print("Stationary:")
-names(stat.result.direct.df[1,-1])[ stat.result.direct.df[1,-1] == "S"]
+head(names(stat.result.direct.df[1,-1])[ stat.result.direct.df[1,-1] == "S"], 5)
 #Non Stationary
-print("Non Stationary")
-names(stat.result.direct.df[1,-1])[ stat.result.direct.df[1,-1] == "N"]
-```
+print("Non Stationary:")
+head(names(stat.result.direct.df[1,-1])[ stat.result.direct.df[1,-1] == "N"], 5)
 
+
+#Find differencings to make it stationary 
+ndiffs.suggested <- sapply(train.df.xts, 
+                           function(ts.this)
+                           {
+                              forecast::ndiffs(ts.this[!is.na(ts.this)], alpha = 0.05, max.d = 10)
+                           })
+
+
+ndiffs.suggested.file <- "ndiffs.suggested.df.csv"
+ndiffs.suggested.df   <- data.frame("name" = names(ndiffs.suggested) , "lag" = as.numeric(ndiffs.suggested))
+
+#Save suggested differences into a file. This will be used by test data as well.
+write.csv(ndiffs.suggested.df, ndiffs.suggested.file, row.names = FALSE)
+```
+(**Independt tests on data till 1996 and another till 2018 suggest different lags => this means model needs to be recalibrated after a few years**)
+
+
+```{r}
+# ndiffs.suggested.df %>%
+#             kable() %>%
+#             kable_styling()
+```
 
 
 #### Some Checks on seasonality
@@ -115,9 +158,9 @@ names(stat.result.direct.df[1,-1])[ stat.result.direct.df[1,-1] == "N"]
 #There will be error here as data is seasonally adjusted
 #plot(decompose(direct.df.xts$RPI))
 
-is.seasonlity <- sapply(names(direct.df.xts), function(name)
+is.seasonlity <- sapply(names(train.df.xts), function(name)
                                               {
-                                                res <- try(stl(direct.df.xts[, name], s.window = "periodic"),
+                                                res <- try(stl(train.df.xts[, name], s.window = "periodic"),
                                                            silent = TRUE) 
                                                 #we do not want to print error
                                                 ifelse(class(res) == "try-error", FALSE, TRUE)
@@ -130,35 +173,13 @@ if(sum(is.seasonlity) > 0)
 ```
 
 
-
-#### Find differencings to make it stationary 
-(**Independt tests on data till 1996 and another till 2018 suggest different lags => this means model needs to be recalibrated after a few years**)
-```{r}
-ndiffs.suggested <- sapply(direct.df.xts, function(ts.this)
-                                          {
-                                            forecast::ndiffs(ts.this[!is.na(ts.this)], alpha = 0.05, max.d = 10)
-                                          }
-                           )
-ndiffs.suggested.file <- "ndiffs.suggested.df.csv"
-ndiffs.suggested.df <- data.frame("name" = names(ndiffs.suggested) , "lag" = as.numeric(ndiffs.suggested))
-write.csv(ndiffs.suggested.df, ndiffs.suggested.file, row.names = FALSE)
-```
-
-
-
-```{r}
-ndiffs.suggested.df %>%
-            kable() %>%
-            kable_styling()
-```
-
 #### Construct stationary series
 
 Make data series stationary. There is  doubt what what to do first, stationarizing or anomaly detection. I think stationarizing first is better as there are not many outliers. Stationarity suggestion is based on overall data, in which outlier will not have any influence. Further differencing sugested will automatically help detect outliers. For simplicity we will not remove outlier but repace them with corresspoding bounds.
 
 ```{r}
 
-stationarised.res <- sapply(direct.df.xts, function(this.ts){
+stationarised.res <- sapply(train.df.xts, function(this.ts){
                                               lag <- ndiffs.suggested[as.character(names(this.ts))]
                                               #
                                               if(lag == 0){ #no transformation needed
@@ -175,33 +196,28 @@ for(i in 2:length(stationarised.res))
   stationarised.xts <- merge.xts(stationarised.xts, stationarised.res[[i]], check.names = FALSE)
 }
 
-names(stationarised.xts) <- names(direct.df.xts)
+names(stationarised.xts) <- names(train.df.xts)
 
+#Write stationarised data to a file
+#write.zoo(stationarised.xts, file = "stationarised.xts.csv", row.names = FALSE)
 ```
 
 *** There are a few series such as NONBORRES which are too voltile after 2008 ***
 
 ```{r}
-plot.xts(direct.df.xts$NONBORRES)
+plot.xts(train.df.xts$NONBORRES)
 ```
 
 Check later if stationarising worked. (TBD). You can do so by taking recommended lags and doing adf test
 
-tseries::adf.test(stationarised.xts$RPI[!is.na(stationarised.xts$RPI)])
-
-```{r}
-#Write stationarised data to a file
-write.zoo(stationarised.xts, file = "stationarised.xts.csv", row.names = FALSE)
-```
-
-
 There are lots of NA's, top 4 rows have lots of NA's. Lets remove them first
 ```{r}
 stationarised.xts <- stationarised.xts[-c(1:2), ]
-```
 
-```{r}
-stationarised.xts.df <- data.frame("dates" = index(stationarised.xts), coredata(stationarised.xts), check.names = FALSE)
+#Create a data frame of stationarized series
+stationarised.xts.df <- data.frame("dates" = index(stationarised.xts), 
+                                   coredata(stationarised.xts), 
+                                   check.names = FALSE)
 ```
 
 
@@ -364,11 +380,21 @@ print(timing)
 colnames(imputed) <- colnames(scaled.stnd.df)[-1]
 ```
 
-
 Write imputed data to file
 ```{r}
 scaled.stnd.imputed.df <- data.frame("Dates" =  scaled.stnd.df$dates, imputed, check.names = FALSE)
 write.csv(scaled.stnd.imputed.df, "scaled.stnd.imputed.df.csv", row.names = FALSE)
 ```
+
+
+
+
+
+
+
+
+
+
+
 
 
