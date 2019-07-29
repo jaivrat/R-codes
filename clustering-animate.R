@@ -2,6 +2,12 @@ rm(list = ls())
 setwd('/Users/jvsingh/work/github/R-codes')
 
 datf <- read.csv(file = "data/custer_points.csv", header = TRUE, stringsAsFactors = FALSE)
+#> head(datf)
+#     X    Y category
+#1 7.45 7.45        1
+#2 8.20 6.80        1
+#3 8.20 3.70        1
+#You may generatye data from here : https://www.librec.net/datagen.html
 
 library(ggplot2)
 
