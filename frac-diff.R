@@ -172,7 +172,7 @@ mytest.res <- merge.xts(series, mytest)
 plot(mytest.res)
 tseries::adf.test(mytest.res$mytest)	
 
-
+#Adding a comment
 
 
 
