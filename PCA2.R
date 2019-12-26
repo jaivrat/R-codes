@@ -1,4 +1,5 @@
 #data I gerenaretd using https://www.librec.net/datagen.html, at approx 45 dgrees : Will help verify components
+library(ggplot2)
 df <- read.csv(text = 
 "x,y,lab
 3, 3.05, 1
