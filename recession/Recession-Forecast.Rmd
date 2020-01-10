@@ -195,7 +195,7 @@ scaled.centered <-  (spliced.df[1, ] - means.all) / sd.all
 
 #First is data mapped to principal component direction : scaled.centered %*% pca$rotation
 #Second is pca$x
-scaled.centered %*% pca$rotation - pca$x[1,]
+as.matrix(scaled.centered) %*% pca$rotation - pca$x[1,]
 
 #lest see of dropped columns are linear expressibly by rest of data, then we can simply drop them
 sapply(names(dropped.df), function(col.name ){
@@ -224,7 +224,16 @@ rec.df.xts <- xts(rec.df$USREC, rec.df$DATE)
 
 rec.df.adj.xts <- lag(rec.df.xts, -12)
 final.data.xts <- merge.xts(rec.df.adj.xts, final.data.xts)
+final.data.xts <- final.data.xts[complete.cases(final.data.xts), ]
+  
+  
+#70% train set
+till.row  <- floor(0.70 * dim(final.data.xts)[1])
+train.idx <- (1:dim(final.data.xts)[1]) < till.row 
+train_set <- final.data.xts[train.idx, ]
+test_set  <- final.data.xts[!train.idx, ]
 
+train_set
 
 a <- seq(0.1, 0.9, 0.05)
 search <- foreach(i = a, .combine = rbind) %dopar% {
