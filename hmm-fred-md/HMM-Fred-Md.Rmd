@@ -75,11 +75,13 @@ names(direct.df.xts) <- c(old.names, "GS10_minus_TB3MS")
 Ideally it should be done on test data only. Because we will apply all these results on completely unseen data.
 
 ```{r}
+#Train data set
+train.df.xts       <- direct.df.xts["/1997"]
+
 #Test data set
 test.df.xts <- direct.df.xts["1997/"]
 
-#Train data set
-train.df.xts       <- direct.df.xts["/1997"]
+
 
 #Take a bkp of full data before deleting the full data (just to be safe later that we are not fwd looking)
 direct.df.xts.bkp  <- direct.df.xts
