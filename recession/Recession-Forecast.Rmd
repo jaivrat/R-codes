@@ -36,7 +36,7 @@ direct.df.xts <- xts(direct.df[,-1], direct.df$sasdate)
 
 #Replace missing values by the latest observation. Please note that there may be missing values in "real" decision scenarios which may not be 
 #caught by one time experiment. ie in case if we are doing real backtests
-#direct.df.xts <- zoo::na.locf(direct.df.xts)
+direct.df.xts <- zoo::na.locf(direct.df.xts)
 ```
 
 
@@ -54,58 +54,166 @@ vis_dat(data.frame(direct.df.xts))
 ```
 
 ```{r}
- apply(direct.df.xts, 1, function(elem) sum(is.na(elem)))
+ #apply(direct.df.xts, 1, function(elem) sum(is.na(elem)))
 ```
 Seems that there are many missing till 1959-12-01. Let us drop them
 
 ```{r}
+vis_dat(data.frame(direct.df.xts))
+
 direct.df.xts <- window(direct.df.xts,start = as.Date("1959-12-01") + 1)
 vis_dat(data.frame(direct.df.xts))
 ```
 
-There are 5 columns which have got NA's. 
 
 
-            RPI         W875RX1 DPCERA3M086SBEA         RETAILx          INDPRO         IPFPNSS         IPFINAL         IPCONGD 
-              0               0               0               0               0               0               0               0 
-       IPDCONGD        IPNCONGD         IPBUSEQ           IPMAT          IPDMAT          IPNMAT       IPMANSICS       IPB51222S 
-              0               0               0               0               0               0               0               0 
-        IPFUELS          CUMFNS         CLF16OV          CE16OV          UNRATE        UEMPMEAN         UEMPLT5       UEMP5TO14 
-              0               0               0               0               0               0               0               0 
-       UEMP15OV       UEMP15T26        UEMP27OV         CLAIMSx          PAYEMS          USGOOD   CES1021000001          USCONS 
-              0               0               0               0               0               0               0               0 
-         MANEMP         DMANEMP        NDMANEMP          SRVPRD           USTPU        USWTRADE         USTRADE          USFIRE 
-              0               0               0               0               0               0               0               0 
-         USGOVT   CES0600000007         AWOTMAN          AWHMAN           HOUST         HOUSTNE         HOUSTMW          HOUSTS 
-              0               0               0               0               0               0               0               0 
-         HOUSTW          PERMIT        PERMITNE        PERMITMW         PERMITS         PERMITW         AMDMNOx         AMDMUOx 
-              0               0               0               0               0               0               0               0 
-           M1SL            M2SL          M2REAL           AMBSL        TOTRESNS       NONBORRES        BUSLOANS          REALLN 
-              0               0               0               0               0               0               0               0 
-        S&P 500     S&P: indust        FEDFUNDS           CP3Mx           TB3MS           TB6MS             GS1             GS5 
-              0               0               0               0               0               0               0               0 
-           GS10             AAA             BAA       COMPAPFFx        TB3SMFFM        TB6SMFFM          T1YFFM          T5YFFM 
-              0               0               0               0               0               0               0               0 
-        T10YFFM          AAAFFM          BAAFFM         EXSZUSx         EXJPUSx         EXUSUKx         EXCAUSx      WPSFD49207 
-              0               0               0               0               0               0               0               0 
-     WPSFD49502         WPSID61         WPSID62       OILPRICEx          PPICMM        CPIAUCSL        CPIAPPSL        CPITRNSL 
-              0               0               0               0               0               0               0               0 
-       CPIMEDSL     CUSR0000SAC     CUSR0000SAD     CUSR0000SAS        CPIULFSL   CUSR0000SA0L2   CUSR0000SA0L5           PCEPI 
-              0               0               0               0               0               0               0               0 
-DDURRG3M086SBEA DNDGRG3M086SBEA DSERRG3M086SBEA   CES0600000008   CES2000000008   CES3000000008           MZMSL          INVEST 
-              0               0               0               0               0               0               0               0 
-      CMRMTSPLx             HWI       HWIURATIO         BUSINVx        ISRATIOx        NONREVSL          CONSPI   S&P div yield 
-              1               1               1               1               1               1               1               1 
-    DTCOLNVHFNM        DTCTHFNM    S&P PE ratio         VXOCLSx         ANDENOx        UMCSENTx        TWEXMMTH          ACOGNO 
-              1               1               3              30              97             144             156             386 
+```{r}
+
+head(direct.df.xts)
+
+#For all columns let us create yoy, mom, qq, semi
+
+#diff(direct.df.xts[, "RPI"], lag = 1, differences = 1, arithmetic = TRUE, log = FALSE, na.pad = TRUE, ...)
 
 
-ACOGNO : Value of Manufacturers' New Orders for Consumer Goods Industries (386 NA) Starts from  1992
-TWEXMMTH: Trade Weighted U.S. Dollar Index: Major Currencies, Goods       (156) Starts from  1973
-UMCSENTx: University of Michigan: Consumer Sentiment                      (144) Starts from Feb 1978
+diff.periodic <- function(name){
+ this.xts  <- direct.df.xts[, name]
+ yoy <- diff(direct.df.xts[,name], lag = 12, 
+             differences = 1, 
+             arithmetic = TRUE, log = FALSE, na.pad = TRUE)
+ names(yoy) <- sprintf("%s_yoy", name)
+ 
+ qoq <- diff(direct.df.xts[,name], lag = 3, 
+             differences = 1, 
+             arithmetic = TRUE, log = FALSE, na.pad = TRUE)
+ names(qoq) <- sprintf("%s_qoq", name)
+ 
+ sem <- diff(direct.df.xts[,name], lag = 6, 
+             differences = 1, 
+             arithmetic = TRUE, log = FALSE, na.pad = TRUE)
+ names(sem) <- sprintf("%s_sem", name)
+ 
+ mom <- diff(direct.df.xts[,name], lag = 1, 
+             differences = 1, 
+             arithmetic = TRUE, log = FALSE, na.pad = TRUE)
+ names(mom) <- sprintf("%s_mom", name)
+ 
+ list(yoy = yoy, sem=sem, qoq=qoq, mom=mom)
+}
+
+res     <- sapply(names(direct.df.xts), diff.periodic, simplify = FALSE)
+res.xts <- xts(rep(0, length(index(direct.df.xts))), index(direct.df.xts))
+for(name in names(direct.df.xts))
+{
+ # print(class(res[[name]]))
+  this.xts <- do.call(merge.xts, res[[name]])
+  res.xts  <- merge.xts(res.xts,this.xts)
+}
+res.xts <- res.xts[,-1]
+
+```
 
 
 
+##### Check for seasonality
+
+
+```{r}
+is.any.seasonality <- sapply(names(res.xts), 
+                             function(series.name){
+                                res.tmp <- try(stl(res.xts[, series.name], s.window = "periodic"), silent = TRUE)
+                                ifelse(class(res.tmp) == "try-error", FALSE, TRUE)
+                             })
+if(any(is.any.seasonality))
+{
+  warning("Some series are seasonal")
+}
+```
+
+
+
+#### Do we need to make them stationary
+```{r}
+suggest.diff <- sapply(names(res.xts), 
+                             function(series.name){
+                                forecast::ndiffs(res.xts[, series.name], alpha = 0.05, max.d = 10)
+                             })
+#Lets ignore it for a moment
+```
+
+
+#### Lets have look at NA's
+
+```{r}
+library(visdat)
+vis_dat(data.frame(res.xts))
+```
+
+BEcause of yoy, many data till 1960-12-01 are NA. Lets drop
+
+
+```{r}
+res.xts <- window(res.xts, start = as.Date("1960-12-01") + 1)
+#Also remove last 3 rows and some data may not have arrived
+last.rows <- (dim(res.xts)[1]-3):(dim(res.xts)[1])
+res.xts <- res.xts[-last.rows, ]
+vis_dat(data.frame(res.xts))
+```
+
+
+```{r}
+sapply(res.xts, function(x) sum(is.na(x)))
+sort(sapply(res.xts, function(x) sum(is.na(x))))
+```
+
+There are columns such as 
+
+Rather than imputing, lets check if we can drop them as they may be highly explainable by others.
+
+```{r}
+drop.check.cols <- c("ANDENOx", "UMCSENTx", "VXOCLSx", "TWEXMMTH", "ACOGNO")
+drop.col.names <- apply(expand.grid(drop.check.cols, c("_mom", "_sem", "_qoq", "_yoy")), 1, function(e) paste(e, collapse = ""))
+
+spliced.df <- as.data.frame(res.xts[, names(res.xts)[!names(res.xts) %in% drop.col.names]])
+dropped.df <- as.data.frame(res.xts[, drop.col.names])
+
+### pca of spliced
+pca <- prcomp(spliced.df, scale = TRUE, center = TRUE)
+pca.var <- pca$sdev^2
+pca.var.per <- round(pca.var/sum(pca.var) * 100, 1)
+plot(pca.var.per, type = "l")
+
+pca$rotation
+
+#PCA directions are pca$rotation[,1], pca$rotation[,2]
+apply(pca$rotation, 2, function(x) sum(x^2))
+
+means.all <- apply(spliced.df, 2, mean)
+sd.all    <- apply(spliced.df, 2, sd)
+
+scaled.centered <-  (spliced.df[1, ] - means.all) / sd.all
+
+#First is data mapped to principal component direction : scaled.centered %*% pca$rotation
+#Second is pca$x
+scaled.centered %*% pca$rotation - pca$x[1,]
+
+#lest see of dropped columns are linear expressibly by rest of data, then we can simply drop them
+sapply(names(dropped.df), function(col.name ){
+  tmp <- data.frame("col" = dropped.df[[col.name]], as.data.frame(pca$x))
+  tmp <- tmp[complete.cases(tmp), ]
+  summary(lm( col ~ ., data = tmp))$adj.r.squared
+})
+
+#ABove Shows TWEXMMTH ANDENOx UMCSENTx may be dropped. But it might be better if we simply replace them by their median values. The algorithm can ignore them if sensitivity not found
+
+tmp <- sapply(names(res.xts) , function(x){ 
+                                           vals <- as.numeric(res.xts[, x])
+                                           vals[is.na(vals)] <- median(vals, na.rm = TRUE)
+                                           vals
+                               })
+tmp.xts <- xts(as.data.frame(tmp), index(res.xts))
+names(tmp.xts) <- names(res.xts)
+```
 
 
 
