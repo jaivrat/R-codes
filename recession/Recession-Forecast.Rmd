@@ -11,6 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 
 ```{r warning=FALSE, message=FALSE}
+rm(list=ls())
 library(xts)
 library(PerformanceAnalytics)
 library(tseries)
@@ -18,6 +19,8 @@ library(forecast)
 library(knitr)
 library(kableExtra)
 library(ggplot2)
+library(glmnet)
+library(caret)
 ```
 
 Set working directory
@@ -25,7 +28,7 @@ Set working directory
 ```{r}
 setwd("/Users/jvsingh/work/github/R-codes/recession")
 
-direct.df <- read.csv(file = "./data/2019-08.csv", header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
+direct.df <- read.csv(file = "./data/2019-11.csv", header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
 direct.df <- direct.df[-1, ] #The first row is transform etc..
 
 #Date is in month/date/year format
@@ -221,7 +224,8 @@ setwd("~/work/github/R-codes/recession")
 rec.df <- read.csv(file = "data/USREC.csv", stringsAsFactors = FALSE, header = TRUE)
 rec.df$DATE = as.Date(rec.df$DATE)
 rec.df.xts <- xts(rec.df$USREC, rec.df$DATE)
-
+names(rec.df.xts) <- "USREC"
+  
 rec.df.adj.xts <- lag(rec.df.xts, -12)
 final.data.xts <- merge.xts(rec.df.adj.xts, final.data.xts)
 final.data.xts <- final.data.xts[complete.cases(final.data.xts), ]
@@ -230,35 +234,83 @@ final.data.xts <- final.data.xts[complete.cases(final.data.xts), ]
 #70% train set
 till.row  <- floor(0.70 * dim(final.data.xts)[1])
 train.idx <- (1:dim(final.data.xts)[1]) < till.row 
+
 train_set <- final.data.xts[train.idx, ]
 test_set  <- final.data.xts[!train.idx, ]
 
-train_set
+mu.s  <- apply(final.data.xts[train.idx, -1], 2, mean)
+sig.s <- apply(final.data.xts[train.idx, -1], 2, sd)
 
-a <- seq(0.1, 0.9, 0.05)
-search <- foreach(i = a, .combine = rbind) %dopar% {
-  cv <- cv.glmnet(mdlX, mdlY, family = "binomial", nfold = 10, type.measure = "deviance", paralle = TRUE, alpha = i)
-  data.frame(cvm = cv$cvm[cv$lambda == cv$lambda.1se], lambda.1se = cv$lambda.1se, alpha = i)
-}
-cv3 <- search[search$cvm == min(search$cvm), ]
-md3 <- glmnet(mdlX, mdlY, family = "binomial", lambda = cv3$lambda.1se, alpha = cv3$alpha)
-coef(md3)
-#(Intercept) -1.434700e+00
-#AGE         -8.426525e-04
-#ACADMOS      .           
-#ADEPCNT      .           
-#MAJORDRG     6.276924e-02
-#MINORDRG     .           
-#OWNRENT     -2.780958e-02
-#INCOME      -1.305118e-04
-#SELFEMPL     .           
-#INCPER      -2.085349e-06
-#EXP_INC      .           
-#SPENDING     .           
-#LOGSPEND    -9.992808e-02
-roc(newY, as.numeric(predict(md3, newX, type = "response")))
-#Area under the curve: 0.6449
 
+```
+
+
+```{r}
+
+train_set.x.scaled <- scale(train_set[, -1], center = mu.s, scale = sig.s)
+train_set.y.scaled <- train_set$USREC
+
+
+mdlY = matrix(train_set$USREC, ncol = 1)
+mdlX = train_set.x.scaled
+set.seed(42)
+cv_10 = trainControl(method = "cv", number = 10)
+cv_5   = trainControl(method = "cv", number = 5)
+
+dat.df <- data.frame("USREC" = as.factor(train_set$USREC), train_set.x.scaled)
+mdlX = train_set.x.scaled
+
+
+hit_elnet = train(
+  USREC ~ ., data = dat.df,
+  method = "glmnet",
+  trControl = cv_10
+)
+
+hit_elnet$bestTune
+hit_elnet$results
+
+fit.glm <- glmnet(x = mdlX, y = as.matrix(train_set$USREC, ncol = 1), family = "binomial", alpha = 0.55, 
+       lambda = 0.008799192,
+       intercept=TRUE, standardize = FALSE)
+summary(fit.glm)
+fit.glm$beta
+fit.glm$a0
+plot(fit.glm)
+coef(fit.glm)
+
+```
+
+```{r}
+#ON Train Set 
+pred.prob.train <- predict(fit.glm, as.matrix(train_set.x.scaled), type = "response")
+
+resp.test.xts <- xts(pred.prob.train, index(train_set))
+resp.test.xts <- merge.xts(resp.test.xts, train_set$USREC)
+plot(resp.test.xts)
+```
+
+```{r}
+#Prediction on Test Set
+test_set.x.scaled <- scale(test_set[, -1], center = mu.s, scale = sig.s)
+pred.prob <- predict(fit.glm, as.matrix(test_set.x.scaled), type = "response")
+
+resp.xts <- xts(pred.prob, index(test_set.x.scaled))
+resp.xts <- merge.xts(resp.xts, test_set$USREC)
+
+plot(resp.xts)
+
+
+#
+# Roc curve
+library(ROCR)
+pred <- prediction(predictions = pred.prob, labels = test_set$USREC) 
+perf <- performance(pred,"tpr","fpr")
+plot(perf,colorize=TRUE)
+
+
+#AUC
+performance(pred,measure = "auc")@y.values[[1]]
 
 ```
 
