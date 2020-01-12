@@ -225,8 +225,9 @@ rec.df <- read.csv(file = "data/USREC.csv", stringsAsFactors = FALSE, header = T
 rec.df$DATE = as.Date(rec.df$DATE)
 rec.df.xts <- xts(rec.df$USREC, rec.df$DATE)
 names(rec.df.xts) <- "USREC"
-  
-rec.df.adj.xts <- lag(rec.df.xts, -12)
+
+LAG = 12
+rec.df.adj.xts <- lag(rec.df.xts, -LAG)
 final.data.xts <- merge.xts(rec.df.adj.xts, final.data.xts)
 final.data.xts <- final.data.xts[complete.cases(final.data.xts), ]
   
@@ -285,9 +286,9 @@ coef(fit.glm)
 #ON Train Set 
 pred.prob.train <- predict(fit.glm, as.matrix(train_set.x.scaled), type = "response")
 
-resp.test.xts <- xts(pred.prob.train, index(train_set))
-resp.test.xts <- merge.xts(resp.test.xts, train_set$USREC)
-plot(resp.test.xts)
+resp.train.xts <- xts(pred.prob.train, index(train_set))
+resp.train.xts <- merge.xts(resp.train.xts, train_set$USREC)
+plot(resp.train.xts)
 ```
 
 ```{r}
@@ -295,10 +296,10 @@ plot(resp.test.xts)
 test_set.x.scaled <- scale(test_set[, -1], center = mu.s, scale = sig.s)
 pred.prob <- predict(fit.glm, as.matrix(test_set.x.scaled), type = "response")
 
-resp.xts <- xts(pred.prob, index(test_set.x.scaled))
-resp.xts <- merge.xts(resp.xts, test_set$USREC)
+resp.test.xts <- xts(pred.prob, index(test_set.x.scaled))
+resp.test.xts <- merge.xts(resp.test.xts, test_set$USREC)
 
-plot(resp.xts)
+plot(resp.test.xts)
 
 
 #
