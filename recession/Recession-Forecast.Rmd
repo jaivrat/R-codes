@@ -21,6 +21,7 @@ library(kableExtra)
 library(ggplot2)
 library(glmnet)
 library(caret)
+library(visdat)
 ```
 
 Set working directory
@@ -37,6 +38,20 @@ direct.df$sasdate <- as.Date(direct.df$sasdate, "%m/%d/%Y")
 #get into time series as it will be earier to work with
 direct.df.xts <- xts(direct.df[,-1], direct.df$sasdate)
 
+
+#Add another row of GS10-TB3MS
+x.xts <-  direct.df.xts[, c("TB3MS", "GS10")]
+bond.eqv <- function(discount)
+{
+  100 * (365 * discount/100)/(360 - 91 * discount/100)
+}
+
+x.xts$TB3MSBEQ       <- bond.eqv(as.numeric(x.xts$TB3MS))
+x.xts$GS10_TB3MS     <- x.xts$GS10 - x.xts$TB3MSBEQ
+old.names            <- names(direct.df.xts)
+direct.df.xts        <- merge.xts(direct.df.xts, x.xts$GS10_TB3MS, all = TRUE, check.names = FALSE)
+names(direct.df.xts) <- c(old.names, "GS10_TB3MS")
+
 #Replace missing values by the latest observation. Please note that there may be missing values in "real" decision scenarios which may not be 
 #caught by one time experiment. ie in case if we are doing real backtests
 direct.df.xts <- zoo::na.locf(direct.df.xts)
@@ -52,7 +67,6 @@ As seen from the plot many series seem to ne non-stationary. We need to check fo
 
 ```{r}
 #install.packages("visdat")
-library(visdat)
 vis_dat(data.frame(direct.df.xts))
 ```
 
@@ -63,7 +77,6 @@ Seems that there are many missing till 1959-12-01. Let us drop them
 
 ```{r}
 vis_dat(data.frame(direct.df.xts))
-
 direct.df.xts <- window(direct.df.xts,start = as.Date("1959-12-01") + 1)
 vis_dat(data.frame(direct.df.xts))
 ```
@@ -71,34 +84,49 @@ vis_dat(data.frame(direct.df.xts))
 
 
 ```{r}
-
-head(direct.df.xts)
-
+head(direct.df.xts[,1:10])
 #For all columns let us create yoy, mom, qq, semi
-
 #diff(direct.df.xts[, "RPI"], lag = 1, differences = 1, arithmetic = TRUE, log = FALSE, na.pad = TRUE, ...)
 
+PCT <- TRUE
 
 diff.periodic <- function(name){
  this.xts  <- direct.df.xts[, name]
  yoy <- diff(direct.df.xts[,name], lag = 12, 
              differences = 1, 
              arithmetic = TRUE, log = FALSE, na.pad = TRUE)
+ if(PCT)
+ {
+   yoy <- yoy/lag(direct.df.xts[,name], 12)
+ }
  names(yoy) <- sprintf("%s_yoy", name)
  
  qoq <- diff(direct.df.xts[,name], lag = 3, 
              differences = 1, 
              arithmetic = TRUE, log = FALSE, na.pad = TRUE)
  names(qoq) <- sprintf("%s_qoq", name)
+ if(PCT)
+ {
+   qoq <- qoq/lag(direct.df.xts[,name], 3)
+ }
  
  sem <- diff(direct.df.xts[,name], lag = 6, 
              differences = 1, 
              arithmetic = TRUE, log = FALSE, na.pad = TRUE)
+ if(PCT)
+ {
+   sem <- sem/lag(direct.df.xts[,name], 6)
+ }
  names(sem) <- sprintf("%s_sem", name)
+ 
  
  mom <- diff(direct.df.xts[,name], lag = 1, 
              differences = 1, 
              arithmetic = TRUE, log = FALSE, na.pad = TRUE)
+ if(PCT)
+ {
+   mom <- mom/lag(direct.df.xts[,name], 1)
+ }
  names(mom) <- sprintf("%s_mom", name)
  
  list(yoy = yoy, sem=sem, qoq=qoq, mom=mom)
@@ -141,6 +169,26 @@ suggest.diff <- sapply(names(res.xts),
                              function(series.name){
                                 forecast::ndiffs(res.xts[, series.name], alpha = 0.05, max.d = 10)
                              })
+
+suggest.diff.on.orig <- sapply(names(direct.df.xts), 
+                             function(series.name){
+                                forecast::ndiffs(direct.df.xts[, series.name], alpha = 0.05, max.d = 10)
+                             })
+
+stationarized <- sapply( direct.df.xts, function(in.xts){
+                                        #--function
+                                        this.lag <- suggest.diff.on.orig[as.character(names(in.xts))]
+                                        if(this.lag > 0)
+                                        {
+                                          return(diff.xts(in.xts, this.lag))
+                                        } else {
+                                          return(in.xts)
+                                        }
+                                        }, simplify = FALSE)
+for(i in 1:length(stationarized))
+{
+  res.xts <- merge.xts(res.xts, stationarized[[i]], check.names = FALSE)
+}
 #Lets ignore it for a moment
 ```
 
@@ -165,7 +213,7 @@ vis_dat(data.frame(res.xts))
 
 
 ```{r}
-sapply(res.xts, function(x) sum(is.na(x)))
+#sapply(res.xts, function(x) sum(is.na(x)))
 sort(sapply(res.xts, function(x) sum(is.na(x))))
 ```
 
@@ -174,22 +222,27 @@ There are columns such as
 Rather than imputing, lets check if we can drop them as they may be highly explainable by others.
 
 ```{r}
-drop.check.cols <- c("ANDENOx", "UMCSENTx", "VXOCLSx", "TWEXMMTH", "ACOGNO")
-drop.col.names <- apply(expand.grid(drop.check.cols, c("_mom", "_sem", "_qoq", "_yoy")), 1, function(e) paste(e, collapse = ""))
+write.csv(res.xts, file = "/tmp/x.csv")
+
+#drop.check.cols <- c("ANDENOx", "UMCSENTx", "VXOCLSx", "TWEXMMTH", "ACOGNO")
+#drop.col.names <- apply(expand.grid(drop.check.cols, c("_mom", "_sem", "_qoq", "_yoy")), 1, function(e) paste(e, collapse = ""))
+
+#Find all columns more than 10 na
+drop.col.names <- names(res.xts)[ sapply(names(res.xts), function(col.name) sum(is.na(res.xts[,col.name]))) > 10]
 
 spliced.df <- as.data.frame(res.xts[, names(res.xts)[!names(res.xts) %in% drop.col.names]])
 dropped.df <- as.data.frame(res.xts[, drop.col.names])
 
 ### pca of spliced
-pca <- prcomp(spliced.df, scale = TRUE, center = TRUE)
+pca     <- prcomp(spliced.df, scale = TRUE, center = TRUE)
 pca.var <- pca$sdev^2
 pca.var.per <- round(pca.var/sum(pca.var) * 100, 1)
 plot(pca.var.per, type = "l")
 
-pca$rotation
+#pca$rotation
 
 #PCA directions are pca$rotation[,1], pca$rotation[,2]
-apply(pca$rotation, 2, function(x) sum(x^2))
+#apply(pca$rotation, 2, function(x) sum(x^2))
 
 means.all <- apply(spliced.df, 2, mean)
 sd.all    <- apply(spliced.df, 2, sd)
@@ -198,7 +251,7 @@ scaled.centered <-  (spliced.df[1, ] - means.all) / sd.all
 
 #First is data mapped to principal component direction : scaled.centered %*% pca$rotation
 #Second is pca$x
-as.matrix(scaled.centered) %*% pca$rotation - pca$x[1,]
+#as.matrix(scaled.centered) %*% pca$rotation - pca$x[1,]
 
 #lest see of dropped columns are linear expressibly by rest of data, then we can simply drop them
 sapply(names(dropped.df), function(col.name ){
@@ -208,7 +261,6 @@ sapply(names(dropped.df), function(col.name ){
 })
 
 #ABove Shows TWEXMMTH ANDENOx UMCSENTx may be dropped. But it might be better if we simply replace them by their median values. The algorithm can ignore them if sensitivity not found
-
 tmp <- sapply(names(res.xts) , function(x){ 
                                            vals <- as.numeric(res.xts[, x])
                                            vals[is.na(vals)] <- median(vals, na.rm = TRUE)
@@ -226,14 +278,15 @@ rec.df$DATE = as.Date(rec.df$DATE)
 rec.df.xts <- xts(rec.df$USREC, rec.df$DATE)
 names(rec.df.xts) <- "USREC"
 
-LAG = 12
-rec.df.adj.xts <- lag(rec.df.xts, -LAG)
+FORECAST.TENOR = 12
+rec.df.adj.xts <- lag(rec.df.xts, -FORECAST.TENOR)
 final.data.xts <- merge.xts(rec.df.adj.xts, final.data.xts)
 final.data.xts <- final.data.xts[complete.cases(final.data.xts), ]
-  
+
+SPLIT  = 0.60
   
 #70% train set
-till.row  <- floor(0.70 * dim(final.data.xts)[1])
+till.row  <- floor(SPLIT * dim(final.data.xts)[1])
 train.idx <- (1:dim(final.data.xts)[1]) < till.row 
 
 train_set <- final.data.xts[train.idx, ]
@@ -265,14 +318,14 @@ mdlX = train_set.x.scaled
 hit_elnet = train(
   USREC ~ ., data = dat.df,
   method = "glmnet",
-  trControl = cv_10
+  trControl = cv_5
 )
 
 hit_elnet$bestTune
 hit_elnet$results
 
-fit.glm <- glmnet(x = mdlX, y = as.matrix(train_set$USREC, ncol = 1), family = "binomial", alpha = 0.55, 
-       lambda = 0.008799192,
+fit.glm <- glmnet(x = mdlX, y = as.matrix(train_set$USREC, ncol = 1), family = "binomial", alpha = hit_elnet$bestTune["alpha"], 
+       lambda =  hit_elnet$bestTune["lambda"],
        intercept=TRUE, standardize = FALSE)
 summary(fit.glm)
 fit.glm$beta
