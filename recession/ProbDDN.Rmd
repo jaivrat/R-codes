@@ -1,6 +1,8 @@
 ---
 title: "ProbDDN"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -23,6 +25,7 @@ library(caret)
 #install.packages("visdat")
 library(visdat)
 library(lubridate)
+library(ggplot2)
 ```
 
 
@@ -113,7 +116,7 @@ fit.model <- fit(model, emc = em.control(random.start = FALSE))
 
 
 ```{r}
-fit.model@posterior
+#fit.model@posterior
 dim(fit.model@posterior)
 dim(observed)
 
@@ -176,7 +179,7 @@ max.ddn.measures(fit.model = fit.model)
 ```{r}
 
 
-simulateData <- function(fit.model, n, current.state)
+simulateData <- function(fit.model, n, start.state)
 {
   init.state.probs <- fit.model@init
   trans.prob <- matrix(as.numeric(fit.model@trDens), nrow = num.states, ncol =num.states, byrow = TRUE)
@@ -185,7 +188,7 @@ simulateData <- function(fit.model, n, current.state)
   description <- describeStates(fit.model)
   
   realised.states <- rep(NA, n)
-  curr.state = current.state
+  curr.state = start.state
   for(i in 1:n)
   {
     prob.of.next.states = trans.prob[curr.state, ]
@@ -204,38 +207,73 @@ simulateData <- function(fit.model, n, current.state)
 }
 
 x <- as.numeric(fit.model@posterior[dim(fit.model@posterior)[1], -1])
-current.state <- which(x == max(x))
+start.state <- which(x == max(x))
 nextDates <- as.Date(sapply( 1:12, function(i) as.character(last(index(dat.xts)) %m+% months(i))))
 
-getSampleDDN <- function()
+getSamplePath <- function(start.state)
 {
-  tmp.sim.logret <- simulateData(fit.model = fit.model, 12, current.state = current.state)
+  tmp.sim.logret <- simulateData(fit.model = fit.model, 12, start.state = start.state)
   tmp.ret.xts    <- xts(tmp.sim.logret, nextDates)
-  PerformanceAnalytics::maxDrawdown(tmp.ret.xts)
+  tmp.ret.xts
 }
 
+getSampleDDN <- function(start.state)
+{
+  tmp.ret.xts <- getSamplePath(start.state)
+  PerformanceAnalytics::maxDrawdown(tmp.ret.xts)
+}
+```
+
+
+```{r}
 SIM = 100000
-ddns <- sapply(1:SIM, function(i) getSampleDDN())
-mean(ddns)
+#ddns <- sapply(1:SIM, function(i) getSampleDDN(start.state))
+```
+
+```{r}
+library(parallel)
+
+cl <- parallel::makeCluster(3)
+
+clusterExport(cl, c("getSampleDDN", "getSamplePath", "simulateData", "fit.model", "num.states",
+                    "describeStates", "start.state", "mvrnorm", "nextDates"))
+
+ddns <- parSapply(cl, 1:SIM,  function(i) {
+  library(xts)
+  getSampleDDN(start.state)})
+
+stopCluster(cl)
+
 ```
 
 
 
 
+```{r}
+library(scales)
+pcts <- seq(from = 0, to = 1, by = 0.05) 
+probs <- sapply(pcts, function(pct) mean(ddns>pct))
+ddn.df <- data.frame(drawdowns = pcts, "probability" = probs)
+ggplot(data = ddn.df, aes(x = drawdowns, y = probability)) + geom_line() + geom_point() +
+  scale_y_continuous(labels = percent) + 
+    scale_x_continuous(labels = percent)
+```
 
+```{r}
+ggplot(data.frame(ddns = ddns), aes(x=ddns)) +
+  geom_histogram(aes(y=..density..),      # Histogram with density instead of count on y-axis
+                   #binwidth=.5,
+                   colour="black", fill="white") +
+    geom_density(alpha=.2, fill="#FF6666") + # Overlay with transparent density plot
+scale_x_continuous(labels = percent)
+```
 
-
-
-
-
-
-
-
-
-
-
-
-
+```{r}
+pcts <- seq(from = 0, to = 1, by = 0.10) 
+ddn.res <- data.frame(drawdown.pct = seq(from = 0, to = 1, by = 0.10) * 100 ,
+                     "probability >drawdown.pct" = sapply(pcts, function(pct) mean(ddns>pct)) * 100, check.names = FALSE)
+ddn.res
+```
 
 
 
