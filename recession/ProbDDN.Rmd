@@ -226,14 +226,14 @@ getSampleDDN <- function(start.state)
 
 
 ```{r}
-SIM = 100000
+SIM = 1000000
 #ddns <- sapply(1:SIM, function(i) getSampleDDN(start.state))
 ```
 
 ```{r}
 library(parallel)
 
-cl <- parallel::makeCluster(3)
+cl <- parallel::makeCluster(4)
 
 clusterExport(cl, c("getSampleDDN", "getSamplePath", "simulateData", "fit.model", "num.states",
                     "describeStates", "start.state", "mvrnorm", "nextDates"))
