@@ -1,0 +1,242 @@
+---
+title: "ProbDDN"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r warning=FALSE, message=FALSE}
+rm(list=ls())
+library(xts)
+library(PerformanceAnalytics)
+library(tseries)
+library(forecast)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(glmnet)
+library(caret)
+#install.packages("visdat")
+library(visdat)
+library(lubridate)
+```
+
+
+
+Set working directory
+
+```{r}
+setwd("/Users/jvsingh/work/github/R-codes/recession")
+
+direct.df <- read.csv(file = "./data/2019-11.csv", header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
+direct.df <- direct.df[-1, ] #The first row is transform etc..
+
+#Date is in month/date/year format
+direct.df$sasdate <- as.Date(direct.df$sasdate, "%m/%d/%Y")
+
+#get into time series as it will be earier to work with
+direct.df.xts <- xts(direct.df[,-1], direct.df$sasdate)
+
+#Replace missing values by the latest observation. Please note that there may be missing values in "real" decision scenarios which may not be 
+#caught by one time experiment. ie in case if we are doing real backtests
+direct.df.xts <- zoo::na.locf(direct.df.xts)
+
+rec.df            <- read.csv(file = "data/USREC.csv", stringsAsFactors = FALSE, header = TRUE)
+rec.df$DATE       <- as.Date(rec.df$DATE)
+rec.df.xts        <- xts(rec.df$USREC, rec.df$DATE)
+names(rec.df.xts) <- "USREC"
+
+
+
+#Add another row of GS10-TB3MS
+x.xts <-  direct.df.xts[, c("TB3MS", "GS10")]
+bond.eqv <- function(discount)
+{
+  100 * (365 * discount/100)/(360 - 91 * discount/100)
+}
+
+x.xts$TB3MSBEQ       <- bond.eqv(as.numeric(x.xts$TB3MS))
+x.xts$GS10_TB3MS     <- x.xts$GS10 - x.xts$TB3MSBEQ
+old.names            <- names(direct.df.xts)
+direct.df.xts        <- merge.xts(direct.df.xts, x.xts$GS10_TB3MS, all = TRUE, check.names = FALSE)
+names(direct.df.xts) <- c(old.names, "GS10_TB3MS")
+
+#Let us restrict to two columns only for HMM: S&P 500 and GS10_TB3MS
+dat.xts <- merge.xts(CalculateReturns(direct.df.xts$`S&P 500`, method = "log"), direct.df.xts$GS10_TB3MS)
+dat.xts <- dat.xts[complete.cases(dat.xts), ]
+names(dat.xts) <- c("sp500ret", "g10_3")
+```
+
+
+Model Building
+```{r}
+
+observed <- matrix(coredata(dat.xts), byrow = FALSE, ncol = 2)
+
+library(depmixS4)
+#Model with 3 states
+rModels <- list()
+
+num.states <- 5
+for(i in 1:num.states)
+{
+  rModels[[i]] <- list(depmixS4::MVNresponse(observed ~ 1))
+}
+
+set.seed(42)
+transition.mat <- list()
+for(i in 1:num.states)
+{
+  tmp <- rep(NA, num.states)
+  #Self probabailty to be high obviously
+  tmp[i] <- runif(1, min = 0.5, max = 1)
+  rands <- runif(num.states - 1)
+  tmp[-i] <- ( 1 - tmp[i]) * rands/sum(rands) #distrbute to remaining
+  transition.mat[[i]] = transInit(~1, nstates = num.states, data = data.frame(1), pstart = tmp)
+}
+
+p.init.states <- runif(num.states)
+#p.init.states <- p.init.states/sum(p.init.states)
+
+inMod <- transInit(~1, ns = num.states, ps = p.init.states, data = data.frame(1))
+
+model <- depmixS4::makeDepmix(response = rModels, transition = transition.mat, prior = inMod)
+
+set.seed(42)
+fit.model <- fit(model, emc = em.control(random.start = FALSE))
+
+```
+
+
+```{r}
+fit.model@posterior
+dim(fit.model@posterior)
+dim(observed)
+
+#Logistic to see which is recession state
+tmp.xts <- xts(as.data.frame(fit.model@posterior[,-1]), index(dat.xts))
+plot(tmp.xts, legend.loc = "topleft")
+
+tmp.xts <- merge.xts(tmp.xts, rec.df.xts, all = FALSE)
+tmp.xts.df <- as.data.frame(tmp.xts)
+tmp.xts.df$USREC <- as.factor(tmp.xts.df$USREC)
+log.fit <- glm( USREC ~ ., data = tmp.xts.df, family = "binomial" )
+summary(log.fit)
+
+plot.xts(tmp.xts[, c("S2", "USREC")], legend.loc = "topright")
+
+#fit.model@posterior
+#fit.model@trDens
+#fit.model@init
+ 
+```
+
+
+
+```{r}
+## Description of states: two variables so two simensional
+
+describeStates <- function(fit.model)
+{
+  description <- list()
+  for(i in 1:fit.model@nstates)
+  {
+    mu <- as.numeric(fit.model@response[[i]][[1]]@parameters$coefficients)
+    Sigma <- fit.model@response[[i]][[1]]@parameters$Sigma
+    Sigma.mat <- rbind(c(Sigma[1], Sigma[2]),
+                       c(Sigma[2], Sigma[3]))
+    description[[i]] <- list(mu = mu, Sigma.mat = Sigma.mat)
+  }
+  description
+}
+
+
+max.ddn.measures <- function(fit.model)
+{
+  description <- describeStates(fit.model)
+  result <- rep(0, fit.model@nstates)
+  for(i in 1:fit.model@nstates)
+  {
+    result[i] <- fBasics::maxddStats(mean = description[[i]]$mu[1], 
+                                     sd = sqrt(description[[i]]$Sigma.mat[1,1]), 
+                                     horizon =12)
+  }
+  result
+}
+
+max.ddn.measures(fit.model = fit.model)
+```
+
+
+
+```{r}
+
+
+simulateData <- function(fit.model, n, current.state)
+{
+  init.state.probs <- fit.model@init
+  trans.prob <- matrix(as.numeric(fit.model@trDens), nrow = num.states, ncol =num.states, byrow = TRUE)
+  
+  #list of mu and sigma
+  description <- describeStates(fit.model)
+  
+  realised.states <- rep(NA, n)
+  curr.state = current.state
+  for(i in 1:n)
+  {
+    prob.of.next.states = trans.prob[curr.state, ]
+    realised.states[i] <- sample(1:num.states, size = 1, prob = prob.of.next.states)
+    curr.state = realised.states[i]
+    #print(sprintf("currstate = %s", curr.state))
+  }
+  
+  emissions <- sapply(1:n, function(i) {
+    state <- realised.states[i]
+    rnd <- mvrnorm(n = 1, mu = description[[state]]$mu, Sigma = description[[state]]$Sigma.mat)
+    rnd[1] #first is log returns of S&P
+  })
+  
+  emissions
+}
+
+x <- as.numeric(fit.model@posterior[dim(fit.model@posterior)[1], -1])
+current.state <- which(x == max(x))
+nextDates <- as.Date(sapply( 1:12, function(i) as.character(last(index(dat.xts)) %m+% months(i))))
+
+getSampleDDN <- function()
+{
+  tmp.sim.logret <- simulateData(fit.model = fit.model, 12, current.state = current.state)
+  tmp.ret.xts    <- xts(tmp.sim.logret, nextDates)
+  PerformanceAnalytics::maxDrawdown(tmp.ret.xts)
+}
+
+SIM = 100000
+ddns <- sapply(1:SIM, function(i) getSampleDDN())
+mean(ddns)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
