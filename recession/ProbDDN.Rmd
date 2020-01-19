@@ -143,13 +143,13 @@ plot.xts(tmp.xts[, c("S2", "USREC")], legend.loc = "topright")
 ```{r}
 ## Description of states: two variables so two simensional
 
-describeStates <- function(fit.model)
+describeStates <- function(in.fit.model)
 {
   description <- list()
-  for(i in 1:fit.model@nstates)
+  for(i in 1:in.fit.model@nstates)
   {
-    mu <- as.numeric(fit.model@response[[i]][[1]]@parameters$coefficients)
-    Sigma <- fit.model@response[[i]][[1]]@parameters$Sigma
+    mu <- as.numeric(in.fit.model@response[[i]][[1]]@parameters$coefficients)
+    Sigma <- in.fit.model@response[[i]][[1]]@parameters$Sigma
     Sigma.mat <- rbind(c(Sigma[1], Sigma[2]),
                        c(Sigma[2], Sigma[3]))
     description[[i]] <- list(mu = mu, Sigma.mat = Sigma.mat)
@@ -158,11 +158,11 @@ describeStates <- function(fit.model)
 }
 
 
-max.ddn.measures <- function(fit.model)
+max.ddn.measures <- function(in.fit.model)
 {
-  description <- describeStates(fit.model)
-  result <- rep(0, fit.model@nstates)
-  for(i in 1:fit.model@nstates)
+  description <- describeStates(in.fit.model)
+  result      <- rep(0, in.fit.model@nstates)
+  for(i in 1:in.fit.model@nstates)
   {
     result[i] <- fBasics::maxddStats(mean = description[[i]]$mu[1], 
                                      sd = sqrt(description[[i]]$Sigma.mat[1,1]), 
@@ -171,79 +171,115 @@ max.ddn.measures <- function(fit.model)
   result
 }
 
-max.ddn.measures(fit.model = fit.model)
+max.ddn.measures(in.fit.model = fit.model)
 ```
 
 
 
 ```{r}
 
-
-simulateData <- function(fit.model, n, start.state)
+#simulateData <- function(fit.model, n, start.state)
+simulateData <- function(in.init.state.probs, in.trans.prob, in.description, in.num.states, n.periods, in.start.state)
 {
-  init.state.probs <- fit.model@init
-  trans.prob <- matrix(as.numeric(fit.model@trDens), nrow = num.states, ncol =num.states, byrow = TRUE)
+  #init.state.probs <- fit.model@init
+  #trans.prob <- matrix(as.numeric(fit.model@trDens), nrow = num.states, ncol =num.states, byrow = TRUE)
   
   #list of mu and sigma
-  description <- describeStates(fit.model)
+  #description <- describeStates(fit.model)
   
-  realised.states <- rep(NA, n)
-  curr.state = start.state
-  for(i in 1:n)
+  realised.states <- rep(NA, n.periods)
+  curr.state = in.start.state
+  for(i in 1:n.periods)
   {
-    prob.of.next.states = trans.prob[curr.state, ]
-    realised.states[i] <- sample(1:num.states, size = 1, prob = prob.of.next.states)
+    prob.of.next.states = as.numeric(in.trans.prob[curr.state, ])
+    #if too small, limit to 10-3
+    prob.of.next.states[prob.of.next.states<1e-3] = 1e-3
+    prob.of.next.states  = prob.of.next.states/sum(prob.of.next.states)
+    realised.states[i] <- sample(1:in.num.states, size = 1, prob = prob.of.next.states)
     curr.state = realised.states[i]
     #print(sprintf("currstate = %s", curr.state))
   }
   
-  emissions <- sapply(1:n, function(i) {
+  emissions <- sapply(1:n.periods, function(i) {
     state <- realised.states[i]
-    rnd <- mvrnorm(n = 1, mu = description[[state]]$mu, Sigma = description[[state]]$Sigma.mat)
+    rnd <- mvrnorm(n = 1, mu = in.description[[state]]$mu, Sigma = in.description[[state]]$Sigma.mat)
     rnd[1] #first is log returns of S&P
   })
   
   emissions
 }
 
-x <- as.numeric(fit.model@posterior[dim(fit.model@posterior)[1], -1])
-start.state <- which(x == max(x))
-nextDates <- as.Date(sapply( 1:12, function(i) as.character(last(index(dat.xts)) %m+% months(i))))
-
-getSamplePath <- function(start.state)
+getStartState <- function(in.fit.model)
 {
-  tmp.sim.logret <- simulateData(fit.model = fit.model, 12, start.state = start.state)
-  tmp.ret.xts    <- xts(tmp.sim.logret, nextDates)
-  tmp.ret.xts
+  last(in.fit.model@posterior)$state
 }
 
-getSampleDDN <- function(start.state)
+start.state <- getStartState(fit.model)
+n.periods   <- 12
+nextDates   <- as.Date(sapply( 1:n.periods, function(i) as.character(last(index(dat.xts)) %m+% months(i))))
+
+getSamplePath <- function(in.init.state.probs, in.description, in.num.states, in.trans.prob, in.start.state)
 {
-  tmp.ret.xts <- getSamplePath(start.state)
-  PerformanceAnalytics::maxDrawdown(tmp.ret.xts)
+  tmp.sim.logret <- simulateData(in.init.state.probs = in.init.state.probs,
+                                 in.description = in.description, 
+                                 in.num.states = in.num.states, 
+                                 in.trans.prob = in.trans.prob,
+                                 n.periods = n.periods, 
+                                 in.start.state = in.start.state)
+  tmp.sim.logret
+  #tmp.ret.xts    <- xts(tmp.sim.logret, nextDates)
+  #tmp.ret.xts
 }
+
 ```
 
 
-```{r}
-SIM = 1000000
-#ddns <- sapply(1:SIM, function(i) getSampleDDN(start.state))
-```
 
 ```{r}
-library(parallel)
+SIM = 1000
+PARALLEL = FALSE
 
-cl <- parallel::makeCluster(4)
+trans.prob <- matrix(as.numeric(fit.model@trDens), nrow = num.states, ncol =num.states, byrow = TRUE)
+init.state.probs = fit.model@init
+description  <- describeStates(fit.model)
 
-clusterExport(cl, c("getSampleDDN", "getSamplePath", "simulateData", "fit.model", "num.states",
-                    "describeStates", "start.state", "mvrnorm", "nextDates"))
+ddns <- NULL
+if(PARALLEL)
+{
+  library(parallel)
 
-ddns <- parSapply(cl, 1:SIM,  function(i) {
-  library(xts)
-  getSampleDDN(start.state)})
-
-stopCluster(cl)
-
+  cl <- parallel::makeCluster(parallel::detectCores() - 1)
+  
+  clusterExport(cl, c( "getSamplePath", "simulateData", "fit.model", "num.states","n.periods",
+                      "describeStates", "start.state", "mvrnorm", "nextDates", "trans.prob", "description"))
+  
+  ddns <- parSapply(cl, 1:SIM,  function(i) {
+                            library(xts)
+                            sim.logret <- getSamplePath(
+                                                in.init.state.probs = init.state.probs,
+                                                in.description = description, 
+                                                in.num.states = num.states,
+                                                in.trans.prob =trans.prob, 
+                                                in.start.state = start.state)
+                            tmp.ret.xts <- xts(sim.logret,nextDates)
+                            PerformanceAnalytics::maxDrawdown(tmp.ret.xts)
+    })
+  
+  stopCluster(cl)
+} else {
+  ddns <- sapply(1:SIM,  
+                 function(i) 
+                 {
+                   sim.logret <- getSamplePath(
+                                                in.init.state.probs = init.state.probs,
+                                                in.description = description, 
+                                                in.num.states = num.states,
+                                                in.trans.prob =trans.prob, 
+                                                in.start.state = start.state)
+                   tmp.ret.xts <- xts(sim.logret,nextDates)
+                   PerformanceAnalytics::maxDrawdown(tmp.ret.xts)
+                 })
+}
 ```
 
 
@@ -277,4 +313,148 @@ ddn.res
 
 
 
+##### Validation of drawdowns
 
+```{r}
+
+#----------------------------- Functions
+getFittedModel <- function(in.dat.xts, in.num.states)
+{
+    observed <- matrix(coredata(in.dat.xts), byrow = FALSE, ncol = 2)
+    library(depmixS4)
+    #Model with 3 states
+    rModels <- list()
+    for(i in 1:in.num.states)
+    {
+       rModels[[i]] <- list(depmixS4::MVNresponse(observed ~ 1))
+    }
+  
+    #set.seed(42)
+    transition.mat <- list()
+    for(i in 1:in.num.states)
+    {
+      tmp <- rep(NA, in.num.states)
+      #Self probabailty to be high obviously
+      tmp[i] <- runif(1, min = 0.5, max = 1)
+      rands <- runif(in.num.states - 1)
+      tmp[-i] <- ( 1 - tmp[i]) * rands/sum(rands) #distrbute to remaining
+      transition.mat[[i]] = transInit(~1, nstates = in.num.states, data = data.frame(1), pstart = tmp)
+    }
+  
+    p.init.states <- runif(in.num.states)
+    p.init.states <- p.init.states/sum(p.init.states)
+    
+    inMod <- transInit(~1, ns = in.num.states, ps = p.init.states, data = data.frame(1))
+  
+    model <- depmixS4::makeDepmix(response = rModels, transition = transition.mat, prior = inMod)
+  
+    set.seed(42)
+    fit.model <- fit(model, emc = em.control(random.start = FALSE))
+    fit.model
+}
+
+#1. Fix a current date for future prediction
+
+#2. Fit a model for data till this date
+
+#2. Determine Latest state and model paramaters.
+
+#3. Simulate N Observations
+
+#4. Determine Expected Returns, the std deviation boundsof this Expected Returns
+
+#5. Get the Actual 12 drawdowns
+
+
+#6 Plot
+
+getOutcome.For.Date <- function(now.Date)
+{
+  #1. Fix a current date for future prediction
+  train.data <- window( dat.xts, end = now.Date)
+
+  #2. Fit a model for data till this date
+  fitted.model <- getFittedModel(in.dat.xts = train.data, in.num.states = num.states)
+
+  #2. Determine Latest state and model paramaters.
+  latest.state <- last(fitted.model@posterior)$state
+  #Model Paramteres
+  init.state.probs <- fitted.model@init
+  trans.prob <- matrix(as.numeric(fitted.model@trDens), nrow = num.states, ncol = num.states, byrow = TRUE)
+  #list of mu and sigma
+  description <- describeStates(fitted.model)
+
+  #3. Simulate N Observations
+  nextDates   <- as.Date(sapply( 1:n.periods, function(i) as.character(last(index(dat.xts)) %m+% months(i))))
+
+  #imulate N sample paths
+  sim.paths.xts <- xts(sapply(1:SIM, function(i){
+                       sim.logret <- getSamplePath(
+                                        in.init.state.probs = init.state.probs,
+                                        in.description = description, 
+                                        in.num.states = num.states,
+                                        in.trans.prob = trans.prob, 
+                                        in.start.state = start.state)
+                        sim.logret
+                    }),
+                 nextDates)
+  sim.ddns <- as.numeric(PerformanceAnalytics::maxDrawdown(sim.paths.xts))
+  expected <- mean(sim.ddns)
+  std.dev  <-  sd(sim.ddns)
+  rest     <- sapply(1:20, function(i) mean(sim.ddns > 0.05 * i) ) #Prob( ddn > x%)
+  c(expected -  std.dev, expected, expected +  std.dev,rest)
+}
+
+now.Date   <- as.Date("1999-12-31")
+getOutcome.For.Date(now.Date)
+
+
+```
+
+```{r}
+SIM = 100000
+start.date = as.Date("1990-12-31")
+run.for.dates <- index(dat.xts)[index(dat.xts) > start.date]
+
+ddns.stats <- NULL
+
+library(parallel)
+
+cl <- parallel::makeCluster(parallel::detectCores() - 1)
+  
+clusterExport(cl, c( "getSamplePath", "simulateData", "fit.model", "num.states","n.periods",
+                      "describeStates", "start.state", "mvrnorm", "nextDates", "trans.prob", "description", 
+                     "getOutcome.For.Date", "dat.xts", "getFittedModel", "SIM"))
+  
+ddns.stats <- parSapply(cl, run.for.dates,  function(now.Date) {
+                                              now.Date <- as.Date(now.Date)
+                                              library(xts)
+                                              library(lubridate)
+                                              set.seed(42)
+                                              getOutcome.For.Date(now.Date)})
+  
+stopCluster(cl)
+ddns.stats.xts <- xts(t(ddns.stats), run.for.dates)
+out.file.ddns.stats.xts  <- sprintf("/Users/jvsingh/work/github/R-codes/recession/data/ddns.stats.xts.%s.rds", SIM)
+#saveRDS(ddns.stats.xts, out.file.ddns.stats.xts)
+```
+
+
+
+#### Analysis on above saved data
+
+```{r}
+#Let us plot exact observed drawdowns in next 12 months
+
+obs.ret.xts <- xts(sapply(run.for.dates, function(now.Date){
+                      now.Date = as.Date(now.Date)
+                      fut.date  = now.Date %m+% months(n.periods)
+                      chunk.xts = window(dat.xts$sp500ret, start = now.Date, end = fut.date)
+                      PerformanceAnalytics::maxDrawdown(chunk.xts)
+                    }), run.for.dates)
+
+results.xts <- merge.xts(ddns.stats.xts[, 1:3], obs.ret.xts, all = FALSE)
+names(results.xts) <- c("lb", "expected", "ub", "observed")
+
+plot.xts(results.xts, legend.loc = "topright")
+```
