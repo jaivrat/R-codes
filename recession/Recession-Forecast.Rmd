@@ -55,6 +55,8 @@ names(direct.df.xts) <- c(old.names, "GS10_TB3MS")
 #Replace missing values by the latest observation. Please note that there may be missing values in "real" decision scenarios which may not be 
 #caught by one time experiment. ie in case if we are doing real backtests
 direct.df.xts <- zoo::na.locf(direct.df.xts)
+
+#plot.xts(direct.df.xts[, c("TB3MS", "GS10", "GS10_TB3MS")], legend.loc = "topright")
 ```
 
 
@@ -63,20 +65,16 @@ plot.xts(direct.df.xts, legend.loc = "bottomright")
 ```
 
 
-As seen from the plot many series seem to ne non-stationary. We need to check for seasonality as well.
+As seen from the plot many series seem to be non-stationary. We need to check for seasonality and stationarity.
 
 ```{r}
 #install.packages("visdat")
 vis_dat(data.frame(direct.df.xts))
 ```
 
-```{r}
- #apply(direct.df.xts, 1, function(elem) sum(is.na(elem)))
-```
-Seems that there are many missing till 1959-12-01. Let us drop them
+Seems that there are many missing till 1959-12-01. Let us drop these initial rows
 
 ```{r}
-vis_dat(data.frame(direct.df.xts))
 direct.df.xts <- window(direct.df.xts,start = as.Date("1959-12-01") + 1)
 vis_dat(data.frame(direct.df.xts))
 ```
@@ -84,71 +82,106 @@ vis_dat(data.frame(direct.df.xts))
 
 
 ```{r}
-head(direct.df.xts[,1:10])
+#head(direct.df.xts[,1:10])
 #For all columns let us create yoy, mom, qq, semi
 #diff(direct.df.xts[, "RPI"], lag = 1, differences = 1, arithmetic = TRUE, log = FALSE, na.pad = TRUE, ...)
 
-PCT <- TRUE
+PCT <- FALSE
 
-diff.periodic <- function(name){
- this.xts  <- direct.df.xts[, name]
- yoy <- diff(direct.df.xts[,name], lag = 12, 
-             differences = 1, 
-             arithmetic = TRUE, log = FALSE, na.pad = TRUE)
- if(PCT)
- {
-   yoy <- yoy/lag(direct.df.xts[,name], 12)
- }
- names(yoy) <- sprintf("%s_yoy", name)
- 
- qoq <- diff(direct.df.xts[,name], lag = 3, 
-             differences = 1, 
-             arithmetic = TRUE, log = FALSE, na.pad = TRUE)
- names(qoq) <- sprintf("%s_qoq", name)
- if(PCT)
- {
-   qoq <- qoq/lag(direct.df.xts[,name], 3)
- }
- 
- sem <- diff(direct.df.xts[,name], lag = 6, 
-             differences = 1, 
-             arithmetic = TRUE, log = FALSE, na.pad = TRUE)
- if(PCT)
- {
-   sem <- sem/lag(direct.df.xts[,name], 6)
- }
- names(sem) <- sprintf("%s_sem", name)
- 
- 
- mom <- diff(direct.df.xts[,name], lag = 1, 
-             differences = 1, 
-             arithmetic = TRUE, log = FALSE, na.pad = TRUE)
- if(PCT)
- {
-   mom <- mom/lag(direct.df.xts[,name], 1)
- }
- names(mom) <- sprintf("%s_mom", name)
- 
- list(yoy = yoy, sem=sem, qoq=qoq, mom=mom)
+#------------------------ FUNCTION ---------------------------------#
+#-- diff.periodic:   Calculate Periodic Differences
+#-- input: col name, and pct/non.pct
+#-------------------------------------------------------------------#
+diff.periodic <- function(name, pct.diff){
+                   this.xts  <- direct.df.xts[, name]
+                   yoy <- diff(direct.df.xts[,name], lag = 12, 
+                               differences = 1, 
+                               arithmetic = TRUE, log = FALSE, na.pad = TRUE)
+                   if(pct.diff)
+                   {
+                     yoy <- yoy/lag(direct.df.xts[,name], 12)
+                   }
+                   names(yoy) <- sprintf("%s_yoy", name)
+                   
+                   qoq <- diff(direct.df.xts[,name], lag = 3, 
+                               differences = 1, 
+                               arithmetic = TRUE, log = FALSE, na.pad = TRUE)
+                   names(qoq) <- sprintf("%s_qoq", name)
+                   if(pct.diff)
+                   {
+                     qoq <- qoq/lag(direct.df.xts[,name], 3)
+                   }
+                   
+                   sem <- diff(direct.df.xts[,name], lag = 6, 
+                               differences = 1, 
+                               arithmetic = TRUE, log = FALSE, na.pad = TRUE)
+                   if(pct.diff)
+                   {
+                     sem <- sem/lag(direct.df.xts[,name], 6)
+                   }
+                   names(sem) <- sprintf("%s_sem", name)
+                   
+                   
+                   mom <- diff(direct.df.xts[,name], lag = 1, 
+                               differences = 1, 
+                               arithmetic = TRUE, log = FALSE, na.pad = TRUE)
+                   if(pct.diff)
+                   {
+                     mom <- mom/lag(direct.df.xts[,name], 1)
+                   }
+                   names(mom) <- sprintf("%s_mom", name)
+                   
+                   list(yoy = yoy, sem=sem, qoq=qoq, mom=mom)
 }
 
-res     <- sapply(names(direct.df.xts), diff.periodic, simplify = FALSE)
-res.xts <- xts(rep(0, length(index(direct.df.xts))), index(direct.df.xts))
-for(name in names(direct.df.xts))
+
+
+get.augmented.data <- function(direct.df.xts)
 {
- # print(class(res[[name]]))
-  this.xts <- do.call(merge.xts, res[[name]])
-  res.xts  <- merge.xts(res.xts,this.xts)
+  res     <- sapply(names(direct.df.xts), function(name) diff.periodic(name = name, pct.diff = PCT), simplify = FALSE)
+
+  res.xts <- NULL
+  for(name in names(direct.df.xts))
+  {
+    # print(class(res[[name]]))
+    if(is.null(res.xts))
+    {
+      res.xts <- direct.df.xts[ , name]
+      names(res.xts) <- name
+    } else {
+      assign.names    <- c(names(res.xts), name)
+      res.xts         <- merge.xts(res.xts, direct.df.xts[ , name])
+      names(res.xts)  <- assign.names
+    }
+      this.xts        <- do.call(merge.xts, res[[name]])
+      names(this.xts) <- as.character(unlist(lapply(res[[name]], names)))
+      
+      assign.names    <- c(names(res.xts), names(this.xts))
+      res.xts         <- merge.xts(res.xts,this.xts)
+      names(res.xts)  <- assign.names
+  }
+  res.xts
 }
-res.xts <- res.xts[,-1]
+
+res.xts <- get.augmented.data(direct.df.xts)
 
 ```
 
+##### Vizualize the enhanced dataset
+```{r}
+vis_dat(data.frame(coredata(res.xts)))
+```
+
+##### Unavailable data
+
+Let us drop data which have more than 2% NA and also drop initial rows for which we hve implied NA's because of yoy/mom/sem transformations.
+```{r}
+x <- apply(res.xts, 2, function(x) sum(is.na(x))/length(x))
+res.xts <- res.xts[, names(x[x<0.02])]
+```
 
 
 ##### Check for seasonality
-
-
 ```{r}
 is.any.seasonality <- sapply(names(res.xts), 
                              function(series.name){
@@ -161,80 +194,87 @@ if(any(is.any.seasonality))
 }
 ```
 
+We find there is no seasonality issues in the transformed data
 
 
-#### Do we need to make them stationary
+#### Check for Stationarity
+
+Check for stationarity and drop those columns which as non-stationary
+
 ```{r}
-suggest.diff <- sapply(names(res.xts), 
-                             function(series.name){
-                                forecast::ndiffs(res.xts[, series.name], alpha = 0.05, max.d = 10)
-                             })
-
-suggest.diff.on.orig <- sapply(names(direct.df.xts), 
-                             function(series.name){
-                                forecast::ndiffs(direct.df.xts[, series.name], alpha = 0.05, max.d = 10)
-                             })
-
-stationarized <- sapply( direct.df.xts, function(in.xts){
-                                        #--function
-                                        this.lag <- suggest.diff.on.orig[as.character(names(in.xts))]
-                                        if(this.lag > 0)
-                                        {
-                                          return(diff.xts(in.xts, this.lag))
-                                        } else {
-                                          return(in.xts)
-                                        }
-                                        }, simplify = FALSE)
-for(i in 1:length(stationarized))
+#--------------------------------------------------------
+#Function : p.values of adf.test. If pvalue <= 0.05 then stationary
+#--------------------------------------------------------
+testStationarity <- function(col.name, in.time.series.xts)
 {
-  res.xts <- merge.xts(res.xts, stationarized[[i]], check.names = FALSE)
+   this.ser <- in.time.series.xts[, col.name]
+   adf.test(this.ser[!is.na(this.ser)])$p.value
 }
+
+suppressWarnings(test.pvals <- sapply(names(res.xts), function(col.name) testStationarity(col.name = col.name, in.time.series.xts = res.xts)))
+# Non-stationary
+#names(test.pvals)[test.pvals > 0.05]
+
+#rop those columns which as non-stationary
+res.xts <- res.xts[ ,names(test.pvals)[test.pvals <= 0.05] ]
+```
+
+#### Do we need to make them stationary (We have dropped non statinary above)
+```{r}
+# suggest.diff <- sapply(names(res.xts), 
+#                              function(series.name){
+#                                 forecast::ndiffs(res.xts[, series.name], alpha = 0.05, max.d = 10)
+#                              })
+# 
+# suggest.diff.on.orig <- sapply(names(direct.df.xts), 
+#                              function(series.name){
+#                                 forecast::ndiffs(direct.df.xts[, series.name], alpha = 0.05, max.d = 10)
+#                              })
+# 
+# stationarized <- sapply( direct.df.xts, function(in.xts){
+#                                         #--function
+#                                         this.lag <- suggest.diff.on.orig[as.character(names(in.xts))]
+#                                         if(this.lag > 0)
+#                                         {
+#                                           return(diff.xts(in.xts, this.lag))
+#                                         } else {
+#                                           return(in.xts)
+#                                         }
+#                                         }, simplify = FALSE)
+# for(i in 1:length(stationarized))
+# {
+#   res.xts <- merge.xts(res.xts, stationarized[[i]], check.names = FALSE)
+# }
 #Lets ignore it for a moment
 ```
 
 
 #### Lets have look at NA's
-
 ```{r}
 library(visdat)
 vis_dat(data.frame(res.xts))
 ```
 
-BEcause of yoy, many data till 1960-12-01 are NA. Lets drop
 
+
+Because of yoy, many data till 1960-12-01 are NA. 
 
 ```{r}
-res.xts <- window(res.xts, start = as.Date("1960-12-01") + 1)
-#Also remove last 3 rows and some data may not have arrived
-last.rows <- (dim(res.xts)[1]-3):(dim(res.xts)[1])
-res.xts <- res.xts[-last.rows, ]
-vis_dat(data.frame(res.xts))
+res.xts   <- window(res.xts, start = as.Date("1960-12-01") + 1)
+#Also Remove last rows which may be incomplete
+res.xts   <- res.xts[complete.cases(res.xts), ]
 ```
 
 
-```{r}
-#sapply(res.xts, function(x) sum(is.na(x)))
-sort(sapply(res.xts, function(x) sum(is.na(x))))
-```
-
-There are columns such as 
-
-Rather than imputing, lets check if we can drop them as they may be highly explainable by others.
 
 ```{r}
 write.csv(res.xts, file = "/tmp/x.csv")
 
-#drop.check.cols <- c("ANDENOx", "UMCSENTx", "VXOCLSx", "TWEXMMTH", "ACOGNO")
-#drop.col.names <- apply(expand.grid(drop.check.cols, c("_mom", "_sem", "_qoq", "_yoy")), 1, function(e) paste(e, collapse = ""))
+res.xts.df <- as.data.frame(res.xts, check.names = FALSE)
 
-#Find all columns more than 10 na
-drop.col.names <- names(res.xts)[ sapply(names(res.xts), function(col.name) sum(is.na(res.xts[,col.name]))) > 10]
-
-spliced.df <- as.data.frame(res.xts[, names(res.xts)[!names(res.xts) %in% drop.col.names]])
-dropped.df <- as.data.frame(res.xts[, drop.col.names])
 
 ### pca of spliced
-pca     <- prcomp(spliced.df, scale = TRUE, center = TRUE)
+pca     <- prcomp(res.xts.df, scale = TRUE, center = TRUE)
 pca.var <- pca$sdev^2
 pca.var.per <- round(pca.var/sum(pca.var) * 100, 1)
 plot(pca.var.per, type = "l")
