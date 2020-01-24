@@ -29,6 +29,20 @@ Set working directory
 ```{r}
 setwd("/Users/jvsingh/work/github/R-codes/recession")
 
+#10Y -3M
+ADDSPREAD <- FALSE
+#yoy/mom on pct changes or direct difference
+PCT       <- FALSE
+#--- Forecast tenor: we want to say recession(at t+Forecast tenor) = f(data at t)
+FORECAST.TENOR = 0
+
+
+
+rec.df      <- read.csv(file = "data/USREC.csv", stringsAsFactors = FALSE, header = TRUE)
+rec.df$DATE <- as.Date(rec.df$DATE)
+rec.df.xts  <- xts(rec.df$USREC, rec.df$DATE)
+names(rec.df.xts) <- "USREC"
+
 direct.df <- read.csv(file = "./data/2019-11.csv", header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
 direct.df <- direct.df[-1, ] #The first row is transform etc..
 
@@ -40,7 +54,9 @@ direct.df.xts <- xts(direct.df[,-1], direct.df$sasdate)
 
 
 #Add another row of GS10-TB3MS
-x.xts <-  direct.df.xts[, c("TB3MS", "GS10")]
+if(ADDSPREAD)
+{
+  x.xts <-  direct.df.xts[, c("TB3MS", "GS10")]
 bond.eqv <- function(discount)
 {
   100 * (365 * discount/100)/(360 - 91 * discount/100)
@@ -51,6 +67,8 @@ x.xts$GS10_TB3MS     <- x.xts$GS10 - x.xts$TB3MSBEQ
 old.names            <- names(direct.df.xts)
 direct.df.xts        <- merge.xts(direct.df.xts, x.xts$GS10_TB3MS, all = TRUE, check.names = FALSE)
 names(direct.df.xts) <- c(old.names, "GS10_TB3MS")
+}
+
 
 #Replace missing values by the latest observation. Please note that there may be missing values in "real" decision scenarios which may not be 
 #caught by one time experiment. ie in case if we are doing real backtests
@@ -84,9 +102,7 @@ vis_dat(data.frame(direct.df.xts))
 ```{r}
 #head(direct.df.xts[,1:10])
 #For all columns let us create yoy, mom, qq, semi
-#diff(direct.df.xts[, "RPI"], lag = 1, differences = 1, arithmetic = TRUE, log = FALSE, na.pad = TRUE, ...)
 
-PCT <- FALSE
 
 #------------------------ FUNCTION ---------------------------------#
 #-- diff.periodic:   Calculate Periodic Differences
@@ -178,6 +194,9 @@ Let us drop data which have more than 2% NA and also drop initial rows for which
 ```{r}
 x <- apply(res.xts, 2, function(x) sum(is.na(x))/length(x))
 res.xts <- res.xts[, names(x[x<0.02])]
+
+
+vis_dat(data.frame(coredata(res.xts)))
 ```
 
 
@@ -263,96 +282,113 @@ Because of yoy, many data till 1960-12-01 are NA.
 res.xts   <- window(res.xts, start = as.Date("1960-12-01") + 1)
 #Also Remove last rows which may be incomplete
 res.xts   <- res.xts[complete.cases(res.xts), ]
+vis_dat(data.frame(res.xts))
 ```
 
+Till this point we have only **stationary** and **complete** data series from  **1961-01-01** to **2019-11-01**.
+
+
+
+
+
+## FINAL ANALYSIS
+
+We begin here our final analysis on **res.xts** which contains  **stationary** and **complete** data series from  **1961-01-01** to **2019-11-01**.
+
+
+#### Exploratory analysis
+
+Let us do PCA to check how many components explain the data series.
+
+
+Check PCA on full data set:
+
+```{r}
+VARIANCE.EXPLAIN.THESH = 0.95
+### pca of spliced
+pca         <- prcomp(as.data.frame(res.xts, check.names = FALSE), scale = TRUE, center = TRUE)
+pca.var     <- pca$sdev^2
+pca.var.per <- pca.var/sum(pca.var)
+print(sprintf("Number of components explaining %s = %s, total features = %s", VARIANCE.EXPLAIN.THESH, min(which(cumsum(pca.var.per) >= VARIANCE.EXPLAIN.THESH)), length(pca.var.per)))
+barplot(round(pca.var/sum(pca.var) * 100, 1), xlab = "principal-component", ylab="pct. variation")
+```
+
+Check PCA till yr 1999:
 
 
 ```{r}
-write.csv(res.xts, file = "/tmp/x.csv")
-
-res.xts.df <- as.data.frame(res.xts, check.names = FALSE)
-
-
 ### pca of spliced
-pca     <- prcomp(res.xts.df, scale = TRUE, center = TRUE)
-pca.var <- pca$sdev^2
-pca.var.per <- round(pca.var/sum(pca.var) * 100, 1)
-plot(pca.var.per, type = "l")
+pca         <- prcomp(as.data.frame(window(res.xts, end = "1999-12-31"), check.names = FALSE), scale = TRUE, center = TRUE)
+pca.var     <- pca$sdev^2
+pca.var.per <- pca.var/sum(pca.var)
+print(sprintf("Number of components explaining %s = %s, total features = %s", VARIANCE.EXPLAIN.THESH, min(which(cumsum(pca.var.per) >= VARIANCE.EXPLAIN.THESH)), length(pca.var.per)))
+barplot(round(pca.var/sum(pca.var) * 100, 1), xlab = "principal-component", ylab = "pct. variation")
+```
+
+Explore how many recessions for data we have in FredMD
+
+```{r}
+plot.xts(window(rec.df.xts, start =  first(index(res.xts)), end =  last(index(res.xts))))
+```
+
+
+We see that we have 10 recessions in before 2000.  We can separate training/test data into pre-yr2000 and post-yr2000 respectively. 
+
+```{r}
+
+
+#--- Add recession
+tmp.res.xts.names     <- names(res.xts); tmp.rec.df.xts.names <- names(rec.df.xts)
+final.data.xts        <- merge.xts(lag.xts(rec.df.xts, k = -FORECAST.TENOR), res.xts)
+names(final.data.xts) <- c(tmp.rec.df.xts.names, tmp.res.xts.names)
+
+#-- Only complete Cases
+final.data.xts        <- final.data.xts[complete.cases(final.data.xts), ]
+
 
 #pca$rotation
-
 #PCA directions are pca$rotation[,1], pca$rotation[,2]
 #apply(pca$rotation, 2, function(x) sum(x^2))
-
-means.all <- apply(spliced.df, 2, mean)
-sd.all    <- apply(spliced.df, 2, sd)
-
-scaled.centered <-  (spliced.df[1, ] - means.all) / sd.all
+#means.all       <- apply(spliced.df, 2, mean)
+#sd.all          <- apply(spliced.df, 2, sd)
+#scaled.centered <-  (spliced.df[1, ] - means.all)/sd.all
 
 #First is data mapped to principal component direction : scaled.centered %*% pca$rotation
 #Second is pca$x
 #as.matrix(scaled.centered) %*% pca$rotation - pca$x[1,]
-
 #lest see of dropped columns are linear expressibly by rest of data, then we can simply drop them
-sapply(names(dropped.df), function(col.name ){
-  tmp <- data.frame("col" = dropped.df[[col.name]], as.data.frame(pca$x))
-  tmp <- tmp[complete.cases(tmp), ]
-  summary(lm( col ~ ., data = tmp))$adj.r.squared
-})
-
-#ABove Shows TWEXMMTH ANDENOx UMCSENTx may be dropped. But it might be better if we simply replace them by their median values. The algorithm can ignore them if sensitivity not found
-tmp <- sapply(names(res.xts) , function(x){ 
-                                           vals <- as.numeric(res.xts[, x])
-                                           vals[is.na(vals)] <- median(vals, na.rm = TRUE)
-                                           vals
-                               })
-tmp.xts <- xts(as.data.frame(tmp), index(res.xts))
-names(tmp.xts) <- names(res.xts)
-
-final.data.xts <- tmp.xts
-
-setwd("~/work/github/R-codes/recession")
-
-rec.df <- read.csv(file = "data/USREC.csv", stringsAsFactors = FALSE, header = TRUE)
-rec.df$DATE = as.Date(rec.df$DATE)
-rec.df.xts <- xts(rec.df$USREC, rec.df$DATE)
-names(rec.df.xts) <- "USREC"
-
-FORECAST.TENOR = 12
-rec.df.adj.xts <- lag(rec.df.xts, -FORECAST.TENOR)
-final.data.xts <- merge.xts(rec.df.adj.xts, final.data.xts)
-final.data.xts <- final.data.xts[complete.cases(final.data.xts), ]
-
-SPLIT  = 0.60
-  
-#70% train set
-till.row  <- floor(SPLIT * dim(final.data.xts)[1])
-train.idx <- (1:dim(final.data.xts)[1]) < till.row 
-
-train_set <- final.data.xts[train.idx, ]
-test_set  <- final.data.xts[!train.idx, ]
-
-mu.s  <- apply(final.data.xts[train.idx, -1], 2, mean)
-sig.s <- apply(final.data.xts[train.idx, -1], 2, sd)
+#sapply(names(dropped.df), function(col.name ){
+#  tmp <- data.frame("col" = dropped.df[[col.name]], as.data.frame(pca$x))
+#  tmp <- tmp[complete.cases(tmp), ]
+#  summary(lm( col ~ ., data = tmp))$adj.r.squared
+#})
 
 
+#--- Split train and test
+train.boundary.date <- as.Date("1999-01-31")
+train_set.x <- window(final.data.xts[,-1], end = train.boundary.date)
+train_set.y <- window(final.data.xts[, 1], end = train.boundary.date)
+test_set.x  <- window(final.data.xts[,-1], start = train.boundary.date + 1)
+test_set.y  <- window(final.data.xts[, 1], start = train.boundary.date + 1)
+
+
+#--- Scalings of train
+mu.train  <- apply(train_set.x, 2, mean)
+sd.train  <- apply(train_set.x, 2, sd)
 ```
 
 
 ```{r}
+train_set.x.scaled <- scale(train_set.x, center = mu.train, scale = sd.train)
 
-train_set.x.scaled <- scale(train_set[, -1], center = mu.s, scale = sig.s)
-train_set.y.scaled <- train_set$USREC
-
-
-mdlY = matrix(train_set$USREC, ncol = 1)
+mdlY = matrix(train_set.y$USREC, ncol = 1)
 mdlX = train_set.x.scaled
+
 set.seed(42)
 cv_10 = trainControl(method = "cv", number = 10)
 cv_5   = trainControl(method = "cv", number = 5)
 
-dat.df <- data.frame("USREC" = as.factor(train_set$USREC), train_set.x.scaled)
-mdlX = train_set.x.scaled
+dat.df <- data.frame("USREC" = as.factor(train_set.y$USREC), train_set.x.scaled)
 
 
 hit_elnet = train(
@@ -364,45 +400,42 @@ hit_elnet = train(
 hit_elnet$bestTune
 hit_elnet$results
 
-fit.glm <- glmnet(x = mdlX, y = as.matrix(train_set$USREC, ncol = 1), family = "binomial", alpha = hit_elnet$bestTune["alpha"], 
+fit.glm <- glmnet(x = mdlX, y = as.matrix(train_set.y$USREC, ncol = 1), family = "binomial", alpha = hit_elnet$bestTune["alpha"], 
        lambda =  hit_elnet$bestTune["lambda"],
        intercept=TRUE, standardize = FALSE)
 summary(fit.glm)
-fit.glm$beta
-fit.glm$a0
-plot(fit.glm)
-coef(fit.glm)
-
+#fit.glm$beta
+#fit.glm$a0
+#plot(fit.glm)
+#coef(fit.glm)
 ```
 
 ```{r}
 #ON Train Set 
 pred.prob.train <- predict(fit.glm, as.matrix(train_set.x.scaled), type = "response")
-
-resp.train.xts <- xts(pred.prob.train, index(train_set))
-resp.train.xts <- merge.xts(resp.train.xts, train_set$USREC)
+resp.train.xts  <- xts(pred.prob.train, index(train_set.x.scaled))
+resp.train.xts  <- merge.xts(resp.train.xts, train_set.y$USREC)
 plot(resp.train.xts)
 ```
 
 ```{r}
 #Prediction on Test Set
-test_set.x.scaled <- scale(test_set[, -1], center = mu.s, scale = sig.s)
-pred.prob <- predict(fit.glm, as.matrix(test_set.x.scaled), type = "response")
-
-resp.test.xts <- xts(pred.prob, index(test_set.x.scaled))
-resp.test.xts <- merge.xts(resp.test.xts, test_set$USREC)
-
+test_set.x.scaled <- scale(test_set.x, center = mu.train, scale = sd.train)
+pred.prob.test    <- predict(fit.glm, as.matrix(test_set.x.scaled), type = "response")
+resp.test.xts     <- xts(pred.prob.test, index(test_set.x.scaled))
+resp.test.xts     <- merge.xts(resp.test.xts, test_set.y$USREC)
 plot(resp.test.xts)
+```
 
-
-#
+```{r}
 # Roc curve
 library(ROCR)
-pred <- prediction(predictions = pred.prob, labels = test_set$USREC) 
+pred <- prediction(predictions = pred.prob.test, labels = test_set.y$USREC) 
 perf <- performance(pred,"tpr","fpr")
 plot(perf,colorize=TRUE)
+```
 
-
+```{r}
 #AUC
 performance(pred,measure = "auc")@y.values[[1]]
 
