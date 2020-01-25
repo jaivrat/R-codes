@@ -22,6 +22,7 @@ library(ggplot2)
 library(glmnet)
 library(caret)
 library(visdat)
+library(pracma) #For vector products
 ```
 
 Set working directory
@@ -296,35 +297,6 @@ Till this point we have only **stationary** and **complete** data series from  *
 We begin here our final analysis on **res.xts** which contains  **stationary** and **complete** data series from  **1961-01-01** to **2019-11-01**.
 
 
-#### Exploratory analysis
-
-Let us do PCA to check how many components explain the data series.
-
-
-Check PCA on full data set:
-
-```{r}
-VARIANCE.EXPLAIN.THESH = 0.95
-### pca of spliced
-pca         <- prcomp(as.data.frame(res.xts, check.names = FALSE), scale = TRUE, center = TRUE)
-pca.var     <- pca$sdev^2
-pca.var.per <- pca.var/sum(pca.var)
-print(sprintf("Number of components explaining %s = %s, total features = %s", VARIANCE.EXPLAIN.THESH, min(which(cumsum(pca.var.per) >= VARIANCE.EXPLAIN.THESH)), length(pca.var.per)))
-barplot(round(pca.var/sum(pca.var) * 100, 1), xlab = "principal-component", ylab="pct. variation")
-```
-
-Check PCA till yr 1999:
-
-
-```{r}
-### pca of spliced
-pca         <- prcomp(as.data.frame(window(res.xts, end = "1999-12-31"), check.names = FALSE), scale = TRUE, center = TRUE)
-pca.var     <- pca$sdev^2
-pca.var.per <- pca.var/sum(pca.var)
-print(sprintf("Number of components explaining %s = %s, total features = %s", VARIANCE.EXPLAIN.THESH, min(which(cumsum(pca.var.per) >= VARIANCE.EXPLAIN.THESH)), length(pca.var.per)))
-barplot(round(pca.var/sum(pca.var) * 100, 1), xlab = "principal-component", ylab = "pct. variation")
-```
-
 Explore how many recessions for data we have in FredMD
 
 ```{r}
@@ -441,6 +413,155 @@ performance(pred,measure = "auc")@y.values[[1]]
 
 ```
 
+
+
+#### PCA Model
+
+Let us do PCA to check how many components explain the data series.
+
+Check PCA on full data set:
+
+```{r}
+VARIANCE.EXPLAIN.THESH = 0.95
+
+#We have got scales 
+pca.train         <- prcomp(train_set.x.scaled, scale = FALSE, center = FALSE) 
+pca.train.var     <- pca.train$sdev^2
+pca.var.per       <- pca.train.var/sum(pca.train.var)
+
+#Min components needed
+num.comp <- min(which(cumsum(pca.var.per) >= VARIANCE.EXPLAIN.THESH))
+
+print(sprintf("#Components explaining %s = %s, total features = %s", VARIANCE.EXPLAIN.THESH,num.comp , length(pca.var.per)))
+barplot(round(pca.train.var/sum(pca.train.var) * 100, 1), xlab = "principal-component", ylab="pct. variation")
+```
+
+Some Theoritical PCA Checks
+
+```{r}
+
+#THESE will be 1s as these are PC directions
+apply(pca.train$rotation, 2, function(x) sum(x^2))[1:5]
+apply(pca.train$rotation, 1, function(x) sum(x^2))
+
+
+
+dim(train_set.x.scaled)
+dim(pca.train$rotation)
+dim(pca.train$x)
+
+#This should all be 0, as we apply rotation to data to get scaled.
+(train_set.x.scaled %*% pca.train$rotation)[1, ] - pca.train$x[1,]
+(train_set.x.scaled %*% pca.train$rotation)[1, 1:num.comp] - pca.train$x[1,1:num.comp]
+
+#-- pca.train$rotation contains PC directions(unit modulus each. We can 
+#   find component of our data vector on these PC directions to get data in transforrme space
+#-- pca.train Contains new transformed vectors 
+
+
+#-----------------------Theory-----------------------#
+#               X = U D V'                           #
+#   X: Data                                          #
+#   U: Eigenvectors of XX'                           #
+#   V: Eigenvectors of X'X                           #
+#   SVD function gives U, D and V                    #
+#----------------------------------------------------#
+res.svd <- svd(train_set.x.scaled)
+
+#-Lets verify that "U: Eigenvectors of XX' ": Angle between vectors
+x.xt           <- train_set.x.scaled %*%  t(train_set.x.scaled)
+res.eigen.x.xt <- eigen(x.xt)
+acos( pracma::dot(res.eigen.x.xt$vectors[, 1], res.svd$u[, 1])
+              /
+            (pracma::Norm(res.eigen.x.xt$vectors[, 1]) *pracma::Norm(res.svd$u[, 1])))
+#This should be 1 or -1 : as they be parallel
+sapply(1:dim(res.eigen.x.xt$vectors)[2],
+      function(ith.vector) 
+               pracma::dot(res.eigen.x.xt$vectors[, ith.vector], res.svd$u[, ith.vector])
+               /
+               (pracma::Norm(res.eigen.x.xt$vectors[, ith.vector]) *pracma::Norm(res.svd$u[, ith.vector])))
+#
+
+#-Lets verify that "V: Eigenvectors of X'X ": Angle between vectors
+xt.x           <- t(train_set.x.scaled) %*%  train_set.x.scaled
+res.eigen.xt.x <- eigen(xt.x)
+acos( pracma::dot(res.eigen.xt.x$vectors[, 1], res.svd$v[, 1])
+              /
+            (pracma::Norm(res.eigen.xt.x$vectors[, 1]) *pracma::Norm(res.svd$v[, 1])))
+#This should be 1 or -1 : as they be parallel
+sapply(1:min(dim(res.svd$v)),
+      function(ith.vector) 
+               pracma::dot(res.eigen.xt.x$vectors[, ith.vector], res.svd$v[, ith.vector])
+               /
+               (pracma::Norm(res.eigen.xt.x$vectors[, ith.vector]) *pracma::Norm(res.svd$v[, ith.vector])))
+
+#v is not exactly "only" eigenvectors of X'X :
+# dim(xt.x) : 515 x 515. So there must be 515 eigenvectors of dimensions 515x1 each. 
+# Howeber dim(res.svd$v) has 515 eigenvectors of dimensions 515x1 each
+```
+
+
+Run a PCA Model
+
+```{r}
+train_set.x.pca <- (train_set.x.scaled %*% pca.train$rotation)[, 1:num.comp]
+
+set.seed(42)
+cv_10 = trainControl(method = "cv", number = 10)
+cv_5   = trainControl(method = "cv", number = 5)
+
+dat.df.pca <- data.frame("USREC" = as.factor(train_set.y$USREC), train_set.x.pca)
+
+
+hit_elnet.pca = train(
+  USREC ~ ., data = dat.df,
+  method = "glmnet",
+  trControl = cv_5
+)
+
+hit_elnet.pca$bestTune
+hit_elnet.pca$results
+
+fit.glm.pca <- glmnet(x = train_set.x.pca, y = as.matrix(train_set.y$USREC, ncol = 1), 
+                      family = "binomial", 
+                      alpha = hit_elnet.pca$bestTune["alpha"], 
+                      lambda =  hit_elnet.pca$bestTune["lambda"],
+                      intercept=TRUE, standardize = FALSE)
+summary(fit.glm.pca)
+#fit.glm$beta
+
+```
+
+
+
+
+```{r}
+#ON Train Set 
+pred.prob.train.pca <- predict(fit.glm.pca, as.matrix(train_set.x.pca), type = "response")
+resp.train.pca.xts  <- xts(pred.prob.train.pca, index(train_set.x.scaled))
+resp.train.pca.xts      <- merge.xts(resp.train.pca.xts, train_set.y$USREC)
+plot(resp.train.pca.xts)
+```
+
+
+```{r}
+#Prediction on Test Set
+test_set.x.pca <- (test_set.x.scaled %*% pca.train$rotation)[, 1:num.comp]
+pred.prob.test.pca  <- predict(fit.glm.pca, as.matrix(test_set.x.pca), type = "response")
+resp.test.pca.xts   <- xts(pred.prob.test.pca, index(test_set.x.scaled))
+resp.test.pca.xts   <- merge.xts(resp.test.pca.xts, test_set.y$USREC)
+plot(resp.test.pca.xts)
+```
+
+
+```{r}
+# Roc curve 
+pred.pca <- prediction(predictions = pred.prob.test.pca, labels = test_set.y$USREC) 
+perf.pca <- performance(pred.pca,"tpr","fpr")
+plot(perf.pca,colorize=TRUE)
+```
+
+PCA not very good probably because the principal components are based on train set and test set may not be conforming to same PC's. We might try doing PCA n whole and then using PC's based on full data set for both test and train.
 
 
 
