@@ -1,0 +1,567 @@
+---
+title: "Recession-Forecast"
+author: "Jai Vrat Singh"
+date: "23/09/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r warning=FALSE, message=FALSE}
+rm(list=ls())
+library(xts)
+library(PerformanceAnalytics)
+library(tseries)
+library(forecast)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(glmnet)
+library(caret)
+library(visdat)
+library(pracma) #For vector products
+```
+
+Set working directory
+
+```{r}
+setwd("/Users/jvsingh/work/github/R-codes/recession")
+
+#10Y -3M
+ADDSPREAD <- FALSE
+#yoy/mom on pct changes or direct difference
+PCT       <- FALSE
+#--- Forecast tenor: we want to say recession(at t+Forecast tenor) = f(data at t)
+FORECAST.TENOR = 0
+
+
+
+rec.df      <- read.csv(file = "data/USREC.csv", stringsAsFactors = FALSE, header = TRUE)
+rec.df$DATE <- as.Date(rec.df$DATE)
+rec.df.xts  <- xts(rec.df$USREC, rec.df$DATE)
+names(rec.df.xts) <- "USREC"
+
+direct.df <- read.csv(file = "./data/2019-11.csv", header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
+direct.df <- direct.df[-1, ] #The first row is transform etc..
+
+#Date is in month/date/year format
+direct.df$sasdate <- as.Date(direct.df$sasdate, "%m/%d/%Y")
+
+#get into time series as it will be earier to work with
+direct.df.xts <- xts(direct.df[,-1], direct.df$sasdate)
+
+
+#Add another row of GS10-TB3MS
+if(ADDSPREAD)
+{
+  x.xts <-  direct.df.xts[, c("TB3MS", "GS10")]
+bond.eqv <- function(discount)
+{
+  100 * (365 * discount/100)/(360 - 91 * discount/100)
+}
+
+x.xts$TB3MSBEQ       <- bond.eqv(as.numeric(x.xts$TB3MS))
+x.xts$GS10_TB3MS     <- x.xts$GS10 - x.xts$TB3MSBEQ
+old.names            <- names(direct.df.xts)
+direct.df.xts        <- merge.xts(direct.df.xts, x.xts$GS10_TB3MS, all = TRUE, check.names = FALSE)
+names(direct.df.xts) <- c(old.names, "GS10_TB3MS")
+}
+
+
+#Replace missing values by the latest observation. Please note that there may be missing values in "real" decision scenarios which may not be 
+#caught by one time experiment. ie in case if we are doing real backtests
+direct.df.xts <- zoo::na.locf(direct.df.xts)
+
+#plot.xts(direct.df.xts[, c("TB3MS", "GS10", "GS10_TB3MS")], legend.loc = "topright")
+```
+
+
+```{r}
+plot.xts(direct.df.xts, legend.loc = "bottomright")
+```
+
+
+As seen from the plot many series seem to be non-stationary. We need to check for seasonality and stationarity.
+
+```{r}
+#install.packages("visdat")
+vis_dat(data.frame(direct.df.xts))
+```
+
+Seems that there are many missing till 1959-12-01. Let us drop these initial rows
+
+```{r}
+direct.df.xts <- window(direct.df.xts,start = as.Date("1959-12-01") + 1)
+vis_dat(data.frame(direct.df.xts))
+```
+
+
+
+```{r}
+#head(direct.df.xts[,1:10])
+#For all columns let us create yoy, mom, qq, semi
+
+
+#------------------------ FUNCTION ---------------------------------#
+#-- diff.periodic:   Calculate Periodic Differences
+#-- input: col name, and pct/non.pct
+#-------------------------------------------------------------------#
+diff.periodic <- function(name, pct.diff){
+                   this.xts  <- direct.df.xts[, name]
+                   yoy <- diff(direct.df.xts[,name], lag = 12, 
+                               differences = 1, 
+                               arithmetic = TRUE, log = FALSE, na.pad = TRUE)
+                   if(pct.diff)
+                   {
+                     yoy <- yoy/lag(direct.df.xts[,name], 12)
+                   }
+                   names(yoy) <- sprintf("%s_yoy", name)
+                   
+                   qoq <- diff(direct.df.xts[,name], lag = 3, 
+                               differences = 1, 
+                               arithmetic = TRUE, log = FALSE, na.pad = TRUE)
+                   names(qoq) <- sprintf("%s_qoq", name)
+                   if(pct.diff)
+                   {
+                     qoq <- qoq/lag(direct.df.xts[,name], 3)
+                   }
+                   
+                   sem <- diff(direct.df.xts[,name], lag = 6, 
+                               differences = 1, 
+                               arithmetic = TRUE, log = FALSE, na.pad = TRUE)
+                   if(pct.diff)
+                   {
+                     sem <- sem/lag(direct.df.xts[,name], 6)
+                   }
+                   names(sem) <- sprintf("%s_sem", name)
+                   
+                   
+                   mom <- diff(direct.df.xts[,name], lag = 1, 
+                               differences = 1, 
+                               arithmetic = TRUE, log = FALSE, na.pad = TRUE)
+                   if(pct.diff)
+                   {
+                     mom <- mom/lag(direct.df.xts[,name], 1)
+                   }
+                   names(mom) <- sprintf("%s_mom", name)
+                   
+                   list(yoy = yoy, sem=sem, qoq=qoq, mom=mom)
+}
+
+
+
+get.augmented.data <- function(direct.df.xts)
+{
+  res     <- sapply(names(direct.df.xts), function(name) diff.periodic(name = name, pct.diff = PCT), simplify = FALSE)
+
+  res.xts <- NULL
+  for(name in names(direct.df.xts))
+  {
+    # print(class(res[[name]]))
+    if(is.null(res.xts))
+    {
+      res.xts <- direct.df.xts[ , name]
+      names(res.xts) <- name
+    } else {
+      assign.names    <- c(names(res.xts), name)
+      res.xts         <- merge.xts(res.xts, direct.df.xts[ , name])
+      names(res.xts)  <- assign.names
+    }
+      this.xts        <- do.call(merge.xts, res[[name]])
+      names(this.xts) <- as.character(unlist(lapply(res[[name]], names)))
+      
+      assign.names    <- c(names(res.xts), names(this.xts))
+      res.xts         <- merge.xts(res.xts,this.xts)
+      names(res.xts)  <- assign.names
+  }
+  res.xts
+}
+
+res.xts <- get.augmented.data(direct.df.xts)
+
+```
+
+##### Vizualize the enhanced dataset
+```{r}
+vis_dat(data.frame(coredata(res.xts)))
+```
+
+##### Unavailable data
+
+Let us drop data which have more than 2% NA and also drop initial rows for which we hve implied NA's because of yoy/mom/sem transformations.
+```{r}
+x <- apply(res.xts, 2, function(x) sum(is.na(x))/length(x))
+res.xts <- res.xts[, names(x[x<0.02])]
+
+
+vis_dat(data.frame(coredata(res.xts)))
+```
+
+
+##### Check for seasonality
+```{r}
+is.any.seasonality <- sapply(names(res.xts), 
+                             function(series.name){
+                                res.tmp <- try(stl(res.xts[, series.name], s.window = "periodic"), silent = TRUE)
+                                ifelse(class(res.tmp) == "try-error", FALSE, TRUE)
+                             })
+if(any(is.any.seasonality))
+{
+  warning("Some series are seasonal")
+}
+```
+
+We find there is no seasonality issues in the transformed data
+
+
+#### Check for Stationarity
+
+Check for stationarity and drop those columns which as non-stationary
+
+```{r}
+#--------------------------------------------------------
+#Function : p.values of adf.test. If pvalue <= 0.05 then stationary
+#--------------------------------------------------------
+testStationarity <- function(col.name, in.time.series.xts)
+{
+   this.ser <- in.time.series.xts[, col.name]
+   adf.test(this.ser[!is.na(this.ser)])$p.value
+}
+
+suppressWarnings(test.pvals <- sapply(names(res.xts), function(col.name) testStationarity(col.name = col.name, in.time.series.xts = res.xts)))
+# Non-stationary
+#names(test.pvals)[test.pvals > 0.05]
+
+#rop those columns which as non-stationary
+res.xts <- res.xts[ ,names(test.pvals)[test.pvals <= 0.05] ]
+```
+
+#### Do we need to make them stationary (We have dropped non statinary above)
+```{r}
+# suggest.diff <- sapply(names(res.xts), 
+#                              function(series.name){
+#                                 forecast::ndiffs(res.xts[, series.name], alpha = 0.05, max.d = 10)
+#                              })
+# 
+# suggest.diff.on.orig <- sapply(names(direct.df.xts), 
+#                              function(series.name){
+#                                 forecast::ndiffs(direct.df.xts[, series.name], alpha = 0.05, max.d = 10)
+#                              })
+# 
+# stationarized <- sapply( direct.df.xts, function(in.xts){
+#                                         #--function
+#                                         this.lag <- suggest.diff.on.orig[as.character(names(in.xts))]
+#                                         if(this.lag > 0)
+#                                         {
+#                                           return(diff.xts(in.xts, this.lag))
+#                                         } else {
+#                                           return(in.xts)
+#                                         }
+#                                         }, simplify = FALSE)
+# for(i in 1:length(stationarized))
+# {
+#   res.xts <- merge.xts(res.xts, stationarized[[i]], check.names = FALSE)
+# }
+#Lets ignore it for a moment
+```
+
+
+#### Lets have look at NA's
+```{r}
+library(visdat)
+vis_dat(data.frame(res.xts))
+```
+
+
+
+Because of yoy, many data till 1960-12-01 are NA. 
+
+```{r}
+res.xts   <- window(res.xts, start = as.Date("1960-12-01") + 1)
+#Also Remove last rows which may be incomplete
+res.xts   <- res.xts[complete.cases(res.xts), ]
+vis_dat(data.frame(res.xts))
+```
+
+Till this point we have only **stationary** and **complete** data series from  **1961-01-01** to **2019-11-01**.
+
+
+
+
+
+## FINAL ANALYSIS
+
+We begin here our final analysis on **res.xts** which contains  **stationary** and **complete** data series from  **1961-01-01** to **2019-11-01**.
+
+
+Explore how many recessions for data we have in FredMD
+
+```{r}
+plot.xts(window(rec.df.xts, start =  first(index(res.xts)), end =  last(index(res.xts))))
+```
+
+
+We see that we have 10 recessions in before 2000.  We can separate training/test data into pre-yr2000 and post-yr2000 respectively. 
+
+```{r}
+
+
+#--- Add recession
+tmp.res.xts.names     <- names(res.xts); tmp.rec.df.xts.names <- names(rec.df.xts)
+final.data.xts        <- merge.xts(lag.xts(rec.df.xts, k = -FORECAST.TENOR), res.xts)
+names(final.data.xts) <- c(tmp.rec.df.xts.names, tmp.res.xts.names)
+
+#-- Only complete Cases
+final.data.xts        <- final.data.xts[complete.cases(final.data.xts), ]
+
+
+#pca$rotation
+#PCA directions are pca$rotation[,1], pca$rotation[,2]
+#apply(pca$rotation, 2, function(x) sum(x^2))
+#means.all       <- apply(spliced.df, 2, mean)
+#sd.all          <- apply(spliced.df, 2, sd)
+#scaled.centered <-  (spliced.df[1, ] - means.all)/sd.all
+
+#First is data mapped to principal component direction : scaled.centered %*% pca$rotation
+#Second is pca$x
+#as.matrix(scaled.centered) %*% pca$rotation - pca$x[1,]
+#lest see of dropped columns are linear expressibly by rest of data, then we can simply drop them
+#sapply(names(dropped.df), function(col.name ){
+#  tmp <- data.frame("col" = dropped.df[[col.name]], as.data.frame(pca$x))
+#  tmp <- tmp[complete.cases(tmp), ]
+#  summary(lm( col ~ ., data = tmp))$adj.r.squared
+#})
+
+
+#--- Split train and test
+train.boundary.date <- as.Date("1999-01-31")
+train_set.x <- window(final.data.xts[,-1], end = train.boundary.date)
+train_set.y <- window(final.data.xts[, 1], end = train.boundary.date)
+test_set.x  <- window(final.data.xts[,-1], start = train.boundary.date + 1)
+test_set.y  <- window(final.data.xts[, 1], start = train.boundary.date + 1)
+
+
+#--- Scalings of train
+mu.train  <- apply(train_set.x, 2, mean)
+sd.train  <- apply(train_set.x, 2, sd)
+```
+
+
+```{r}
+train_set.x.scaled <- scale(train_set.x, center = mu.train, scale = sd.train)
+
+mdlY = matrix(train_set.y$USREC, ncol = 1)
+mdlX = train_set.x.scaled
+
+set.seed(42)
+cv_10 = trainControl(method = "cv", number = 10)
+cv_5   = trainControl(method = "cv", number = 5)
+
+dat.df <- data.frame("USREC" = as.factor(train_set.y$USREC), train_set.x.scaled)
+
+
+hit_elnet = train(
+  USREC ~ ., data = dat.df,
+  method = "glmnet",
+  trControl = cv_5
+)
+
+hit_elnet$bestTune
+hit_elnet$results
+
+fit.glm <- glmnet(x = mdlX, y = as.matrix(train_set.y$USREC, ncol = 1), family = "binomial", alpha = hit_elnet$bestTune["alpha"], 
+       lambda =  hit_elnet$bestTune["lambda"],
+       intercept=TRUE, standardize = FALSE)
+summary(fit.glm)
+#fit.glm$beta
+#fit.glm$a0
+#plot(fit.glm)
+#coef(fit.glm)
+```
+
+```{r}
+#ON Train Set 
+pred.prob.train <- predict(fit.glm, as.matrix(train_set.x.scaled), type = "response")
+resp.train.xts  <- xts(pred.prob.train, index(train_set.x.scaled))
+resp.train.xts  <- merge.xts(resp.train.xts, train_set.y$USREC)
+plot(resp.train.xts)
+```
+
+```{r}
+#Prediction on Test Set
+test_set.x.scaled <- scale(test_set.x, center = mu.train, scale = sd.train)
+pred.prob.test    <- predict(fit.glm, as.matrix(test_set.x.scaled), type = "response")
+resp.test.xts     <- xts(pred.prob.test, index(test_set.x.scaled))
+resp.test.xts     <- merge.xts(resp.test.xts, test_set.y$USREC)
+plot(resp.test.xts)
+```
+
+```{r}
+# Roc curve
+library(ROCR)
+pred <- prediction(predictions = pred.prob.test, labels = test_set.y$USREC) 
+perf <- performance(pred,"tpr","fpr")
+plot(perf,colorize=TRUE)
+```
+
+```{r}
+#AUC
+performance(pred,measure = "auc")@y.values[[1]]
+
+```
+
+
+
+#### PCA Model
+
+Let us do PCA to check how many components explain the data series.
+
+Check PCA on full data set:
+
+```{r}
+VARIANCE.EXPLAIN.THESH = 0.95
+
+#We have got scales 
+pca.train         <- prcomp(train_set.x.scaled, scale = FALSE, center = FALSE) 
+pca.train.var     <- pca.train$sdev^2
+pca.var.per       <- pca.train.var/sum(pca.train.var)
+
+#Min components needed
+num.comp <- min(which(cumsum(pca.var.per) >= VARIANCE.EXPLAIN.THESH))
+
+print(sprintf("#Components explaining %s = %s, total features = %s", VARIANCE.EXPLAIN.THESH,num.comp , length(pca.var.per)))
+barplot(round(pca.train.var/sum(pca.train.var) * 100, 1), xlab = "principal-component", ylab="pct. variation")
+```
+
+Some Theoritical PCA Checks
+
+```{r}
+
+#THESE will be 1s as these are PC directions
+apply(pca.train$rotation, 2, function(x) sum(x^2))[1:5]
+apply(pca.train$rotation, 1, function(x) sum(x^2))
+
+
+
+dim(train_set.x.scaled)
+dim(pca.train$rotation)
+dim(pca.train$x)
+
+#This should all be 0, as we apply rotation to data to get scaled.
+(train_set.x.scaled %*% pca.train$rotation)[1, ] - pca.train$x[1,]
+(train_set.x.scaled %*% pca.train$rotation)[1, 1:num.comp] - pca.train$x[1,1:num.comp]
+
+#-- pca.train$rotation contains PC directions(unit modulus each. We can 
+#   find component of our data vector on these PC directions to get data in transforrme space
+#-- pca.train Contains new transformed vectors 
+
+
+#-----------------------Theory-----------------------#
+#               X = U D V'                           #
+#   X: Data                                          #
+#   U: Eigenvectors of XX'                           #
+#   V: Eigenvectors of X'X                           #
+#   SVD function gives U, D and V                    #
+#----------------------------------------------------#
+res.svd <- svd(train_set.x.scaled)
+
+#-Lets verify that "U: Eigenvectors of XX' ": Angle between vectors
+x.xt           <- train_set.x.scaled %*%  t(train_set.x.scaled)
+res.eigen.x.xt <- eigen(x.xt)
+acos( pracma::dot(res.eigen.x.xt$vectors[, 1], res.svd$u[, 1])
+              /
+            (pracma::Norm(res.eigen.x.xt$vectors[, 1]) *pracma::Norm(res.svd$u[, 1])))
+#This should be 1 or -1 : as they be parallel
+sapply(1:dim(res.eigen.x.xt$vectors)[2],
+      function(ith.vector) 
+               pracma::dot(res.eigen.x.xt$vectors[, ith.vector], res.svd$u[, ith.vector])
+               /
+               (pracma::Norm(res.eigen.x.xt$vectors[, ith.vector]) *pracma::Norm(res.svd$u[, ith.vector])))
+#
+
+#-Lets verify that "V: Eigenvectors of X'X ": Angle between vectors
+xt.x           <- t(train_set.x.scaled) %*%  train_set.x.scaled
+res.eigen.xt.x <- eigen(xt.x)
+acos( pracma::dot(res.eigen.xt.x$vectors[, 1], res.svd$v[, 1])
+              /
+            (pracma::Norm(res.eigen.xt.x$vectors[, 1]) *pracma::Norm(res.svd$v[, 1])))
+#This should be 1 or -1 : as they be parallel
+sapply(1:min(dim(res.svd$v)),
+      function(ith.vector) 
+               pracma::dot(res.eigen.xt.x$vectors[, ith.vector], res.svd$v[, ith.vector])
+               /
+               (pracma::Norm(res.eigen.xt.x$vectors[, ith.vector]) *pracma::Norm(res.svd$v[, ith.vector])))
+
+#v is not exactly "only" eigenvectors of X'X :
+# dim(xt.x) : 515 x 515. So there must be 515 eigenvectors of dimensions 515x1 each. 
+# Howeber dim(res.svd$v) has 515 eigenvectors of dimensions 515x1 each
+```
+
+
+Run a PCA Model
+
+```{r}
+train_set.x.pca <- (train_set.x.scaled %*% pca.train$rotation)[, 1:num.comp]
+
+set.seed(42)
+cv_10 = trainControl(method = "cv", number = 10)
+cv_5   = trainControl(method = "cv", number = 5)
+
+dat.df.pca <- data.frame("USREC" = as.factor(train_set.y$USREC), train_set.x.pca)
+
+
+hit_elnet.pca = train(
+  USREC ~ ., data = dat.df,
+  method = "glmnet",
+  trControl = cv_5
+)
+
+hit_elnet.pca$bestTune
+hit_elnet.pca$results
+
+fit.glm.pca <- glmnet(x = train_set.x.pca, y = as.matrix(train_set.y$USREC, ncol = 1), 
+                      family = "binomial", 
+                      alpha = hit_elnet.pca$bestTune["alpha"], 
+                      lambda =  hit_elnet.pca$bestTune["lambda"],
+                      intercept=TRUE, standardize = FALSE)
+summary(fit.glm.pca)
+#fit.glm$beta
+
+```
+
+
+
+
+```{r}
+#ON Train Set 
+pred.prob.train.pca <- predict(fit.glm.pca, as.matrix(train_set.x.pca), type = "response")
+resp.train.pca.xts  <- xts(pred.prob.train.pca, index(train_set.x.scaled))
+resp.train.pca.xts      <- merge.xts(resp.train.pca.xts, train_set.y$USREC)
+plot(resp.train.pca.xts)
+```
+
+
+```{r}
+#Prediction on Test Set
+test_set.x.pca <- (test_set.x.scaled %*% pca.train$rotation)[, 1:num.comp]
+pred.prob.test.pca  <- predict(fit.glm.pca, as.matrix(test_set.x.pca), type = "response")
+resp.test.pca.xts   <- xts(pred.prob.test.pca, index(test_set.x.scaled))
+resp.test.pca.xts   <- merge.xts(resp.test.pca.xts, test_set.y$USREC)
+plot(resp.test.pca.xts)
+```
+
+
+```{r}
+# Roc curve 
+pred.pca <- prediction(predictions = pred.prob.test.pca, labels = test_set.y$USREC) 
+perf.pca <- performance(pred.pca,"tpr","fpr")
+plot(perf.pca,colorize=TRUE)
+```
+
+PCA not very good probably because the principal components are based on train set and test set may not be conforming to same PC's. We might try doing PCA n whole and then using PC's based on full data set for both test and train.
+
+
+
