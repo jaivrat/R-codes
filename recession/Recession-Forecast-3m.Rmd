@@ -1,7 +1,7 @@
 ---
-title: "Recession-Forecast"
+title: "Recession-Forecast-3m"
 author: "Jai Vrat Singh"
-date: "23/09/2019"
+date: "25/01/2020"
 output: html_document
 ---
 
@@ -31,11 +31,11 @@ Set working directory
 setwd("/Users/jvsingh/work/github/R-codes/recession")
 
 #10Y -3M
-ADDSPREAD <- FALSE
+ADDSPREAD <- TRUE
 #yoy/mom on pct changes or direct difference
 PCT       <- FALSE
 #--- Forecast tenor: we want to say recession(at t+Forecast tenor) = f(data at t)
-FORECAST.TENOR = 0
+FORECAST.TENOR = 12
 
 
 
@@ -110,6 +110,7 @@ vis_dat(data.frame(direct.df.xts))
 #-- input: col name, and pct/non.pct
 #-------------------------------------------------------------------#
 diff.periodic <- function(name, pct.diff){
+     #print(sprintf("diff.periodic, name = %s", name))
                    this.xts  <- direct.df.xts[, name]
                    yoy <- diff(direct.df.xts[,name], lag = 12, 
                                differences = 1, 
@@ -231,7 +232,11 @@ testStationarity <- function(col.name, in.time.series.xts)
    adf.test(this.ser[!is.na(this.ser)])$p.value
 }
 
-suppressWarnings(test.pvals <- sapply(names(res.xts), function(col.name) testStationarity(col.name = col.name, in.time.series.xts = res.xts)))
+suppressWarnings(test.pvals <- sapply(names(res.xts), 
+                                      function(col.name){
+                                        #print(sprintf("Checking stationarity for %s", col.name))
+                                        testStationarity(col.name = col.name, in.time.series.xts = res.xts)
+                                        }))
 # Non-stationary
 #names(test.pvals)[test.pvals > 0.05]
 
@@ -343,7 +348,6 @@ train_set.y <- window(final.data.xts[, 1], end = train.boundary.date)
 test_set.x  <- window(final.data.xts[,-1], start = train.boundary.date + 1)
 test_set.y  <- window(final.data.xts[, 1], start = train.boundary.date + 1)
 
-
 #--- Scalings of train
 mu.train  <- apply(train_set.x, 2, mean)
 sd.train  <- apply(train_set.x, 2, sd)
@@ -357,7 +361,7 @@ mdlY = matrix(train_set.y$USREC, ncol = 1)
 mdlX = train_set.x.scaled
 
 set.seed(42)
-cv_10 = trainControl(method = "cv", number = 10)
+cv_10  = trainControl(method = "cv", number = 10)
 cv_5   = trainControl(method = "cv", number = 5)
 
 dat.df <- data.frame("USREC" = as.factor(train_set.y$USREC), train_set.x.scaled)
@@ -372,9 +376,11 @@ hit_elnet = train(
 hit_elnet$bestTune
 hit_elnet$results
 
-fit.glm <- glmnet(x = mdlX, y = as.matrix(train_set.y$USREC, ncol = 1), family = "binomial", alpha = hit_elnet$bestTune["alpha"], 
-       lambda =  hit_elnet$bestTune["lambda"],
-       intercept=TRUE, standardize = FALSE)
+fit.glm <- glmnet(x = mdlX, y = as.matrix(train_set.y$USREC, ncol = 1), 
+                  family = "binomial",
+                  alpha = hit_elnet$bestTune["alpha"], 
+                  lambda =  hit_elnet$bestTune["lambda"],
+                  intercept=TRUE, standardize = FALSE)
 summary(fit.glm)
 #fit.glm$beta
 #fit.glm$a0
@@ -400,168 +406,83 @@ plot(resp.test.xts)
 ```
 
 ```{r}
-# Roc curve
+# Roc curve: Test Set
 library(ROCR)
-pred <- prediction(predictions = pred.prob.test, labels = test_set.y$USREC) 
-perf <- performance(pred,"tpr","fpr")
-plot(perf,colorize=TRUE)
+pred.test <- prediction(predictions = pred.prob.test, labels = test_set.y$USREC) 
+perf.test <- performance(pred.test,"tpr","fpr")
+plot(perf.test,colorize=TRUE)
 ```
 
 ```{r}
-#AUC
-performance(pred,measure = "auc")@y.values[[1]]
+#AUC: Test set
+performance(pred.test,measure = "auc")@y.values[[1]]
+```
 
+```{r}
+#-- Kalman Filter
+library(KFAS)
+model <- SSModel(res.xts$RPI_yoy ~ SSMtrend(1, Q = 0.01), H = 0.01)
+out   <- KFS(model)
+
+temp.xts <- xts(as.numeric(out$att) , index(res.xts$RPI_yoy))
+plot.xts(merge.xts(temp.xts, res.xts$RPI_yoy))
 ```
 
 
-
-#### PCA Model
-
-Let us do PCA to check how many components explain the data series.
-
-Check PCA on full data set:
-
 ```{r}
-VARIANCE.EXPLAIN.THESH = 0.95
-
-#We have got scales 
-pca.train         <- prcomp(train_set.x.scaled, scale = FALSE, center = FALSE) 
-pca.train.var     <- pca.train$sdev^2
-pca.var.per       <- pca.train.var/sum(pca.train.var)
-
-#Min components needed
-num.comp <- min(which(cumsum(pca.var.per) >= VARIANCE.EXPLAIN.THESH))
-
-print(sprintf("#Components explaining %s = %s, total features = %s", VARIANCE.EXPLAIN.THESH,num.comp , length(pca.var.per)))
-barplot(round(pca.train.var/sum(pca.train.var) * 100, 1), xlab = "principal-component", ylab="pct. variation")
-```
-
-Some Theoritical PCA Checks
-
-```{r}
-
-#THESE will be 1s as these are PC directions
-apply(pca.train$rotation, 2, function(x) sum(x^2))[1:5]
-apply(pca.train$rotation, 1, function(x) sum(x^2))
-
-
-
-dim(train_set.x.scaled)
-dim(pca.train$rotation)
-dim(pca.train$x)
-
-#This should all be 0, as we apply rotation to data to get scaled.
-(train_set.x.scaled %*% pca.train$rotation)[1, ] - pca.train$x[1,]
-(train_set.x.scaled %*% pca.train$rotation)[1, 1:num.comp] - pca.train$x[1,1:num.comp]
-
-#-- pca.train$rotation contains PC directions(unit modulus each. We can 
-#   find component of our data vector on these PC directions to get data in transforrme space
-#-- pca.train Contains new transformed vectors 
-
-
-#-----------------------Theory-----------------------#
-#               X = U D V'                           #
-#   X: Data                                          #
-#   U: Eigenvectors of XX'                           #
-#   V: Eigenvectors of X'X                           #
-#   SVD function gives U, D and V                    #
-#----------------------------------------------------#
-res.svd <- svd(train_set.x.scaled)
-
-#-Lets verify that "U: Eigenvectors of XX' ": Angle between vectors
-x.xt           <- train_set.x.scaled %*%  t(train_set.x.scaled)
-res.eigen.x.xt <- eigen(x.xt)
-acos( pracma::dot(res.eigen.x.xt$vectors[, 1], res.svd$u[, 1])
-              /
-            (pracma::Norm(res.eigen.x.xt$vectors[, 1]) *pracma::Norm(res.svd$u[, 1])))
-#This should be 1 or -1 : as they be parallel
-sapply(1:dim(res.eigen.x.xt$vectors)[2],
-      function(ith.vector) 
-               pracma::dot(res.eigen.x.xt$vectors[, ith.vector], res.svd$u[, ith.vector])
-               /
-               (pracma::Norm(res.eigen.x.xt$vectors[, ith.vector]) *pracma::Norm(res.svd$u[, ith.vector])))
+# Classification Tree with rpart
+library(rpart)
 #
+train.df <- data.frame(USREC = train_set.y$USREC, as.data.frame(train_set.x.scaled), check.names = FALSE)
 
-#-Lets verify that "V: Eigenvectors of X'X ": Angle between vectors
-xt.x           <- t(train_set.x.scaled) %*%  train_set.x.scaled
-res.eigen.xt.x <- eigen(xt.x)
-acos( pracma::dot(res.eigen.xt.x$vectors[, 1], res.svd$v[, 1])
-              /
-            (pracma::Norm(res.eigen.xt.x$vectors[, 1]) *pracma::Norm(res.svd$v[, 1])))
-#This should be 1 or -1 : as they be parallel
-sapply(1:min(dim(res.svd$v)),
-      function(ith.vector) 
-               pracma::dot(res.eigen.xt.x$vectors[, ith.vector], res.svd$v[, ith.vector])
-               /
-               (pracma::Norm(res.eigen.xt.x$vectors[, ith.vector]) *pracma::Norm(res.svd$v[, ith.vector])))
+# grow tree
+fit.rpart <- rpart(USREC ~ ., method="class", data=train.df)
 
-#v is not exactly "only" eigenvectors of X'X :
-# dim(xt.x) : 515 x 515. So there must be 515 eigenvectors of dimensions 515x1 each. 
-# Howeber dim(res.svd$v) has 515 eigenvectors of dimensions 515x1 each
+printcp(fit.rpart) # display the results
+plotcp(fit.rpart) # visualize cross-validation results
+summary(fit.rpart) # detailed summary of splits
+
+# plot tree
+plot(fit.rpart, uniform=TRUE,
+   main="Classification Tree for Kyphosis")
+text(fit.rpart, use.n=TRUE, all=TRUE, cex=.8)
+
+# create attractive postscript plot of tree
+#post(fit, file = "~/work/github/R-codes/recession/dats/tree.ps",
+#   title = "Classification Tree for Kyphosis")
+
+
+# prune the tree
+pfit <- prune(fit.rpart, cp=   fit.rpart$cptable[which.min(fit.rpart$cptable[,"xerror"]),"CP"])
+
+# plot the pruned tree
+plot(pfit, uniform=TRUE,
+   main="Pruned Classification Tree for Kyphosis")
+text(pfit, use.n=TRUE, all=TRUE, cex=.8)
 ```
 
-
-Run a PCA Model
-
 ```{r}
-train_set.x.pca <- (train_set.x.scaled %*% pca.train$rotation)[, 1:num.comp]
+#Prediction on Train Set
+pred.rpart.train    <- predict(pfit, train.df, type = "prob")
+resp.train.rpart.xts     <- xts(pred.rpart.train[,2], index(train_set.x))
+resp.train.rpart.xts     <- merge.xts(resp.train.rpart.xts, train_set.y$USREC)
+plot.xts(resp.train.rpart.xts,  legend.loc = "topright")
 
-set.seed(42)
-cv_10 = trainControl(method = "cv", number = 10)
-cv_5   = trainControl(method = "cv", number = 5)
-
-dat.df.pca <- data.frame("USREC" = as.factor(train_set.y$USREC), train_set.x.pca)
-
-
-hit_elnet.pca = train(
-  USREC ~ ., data = dat.df,
-  method = "glmnet",
-  trControl = cv_5
-)
-
-hit_elnet.pca$bestTune
-hit_elnet.pca$results
-
-fit.glm.pca <- glmnet(x = train_set.x.pca, y = as.matrix(train_set.y$USREC, ncol = 1), 
-                      family = "binomial", 
-                      alpha = hit_elnet.pca$bestTune["alpha"], 
-                      lambda =  hit_elnet.pca$bestTune["lambda"],
-                      intercept=TRUE, standardize = FALSE)
-summary(fit.glm.pca)
-#fit.glm$beta
-
-```
-
-
-
-
-```{r}
-#ON Train Set 
-pred.prob.train.pca <- predict(fit.glm.pca, as.matrix(train_set.x.pca), type = "response")
-resp.train.pca.xts  <- xts(pred.prob.train.pca, index(train_set.x.scaled))
-resp.train.pca.xts      <- merge.xts(resp.train.pca.xts, train_set.y$USREC)
-plot(resp.train.pca.xts)
-```
-
-
-```{r}
 #Prediction on Test Set
-test_set.x.pca <- (test_set.x.scaled %*% pca.train$rotation)[, 1:num.comp]
-pred.prob.test.pca  <- predict(fit.glm.pca, as.matrix(test_set.x.pca), type = "response")
-resp.test.pca.xts   <- xts(pred.prob.test.pca, index(test_set.x.scaled))
-resp.test.pca.xts   <- merge.xts(resp.test.pca.xts, test_set.y$USREC)
-plot(resp.test.pca.xts)
+test.df <- data.frame(USREC = test_set.y$USREC, as.data.frame(test_set.x.scaled), check.names = FALSE)
+pred.rpart.test    <- predict(pfit,test.df , type = "prob")
+resp.test.rpart.xts     <- xts(pred.rpart.test[,2], index(test_set.y))
+resp.test.rpart.xts     <- merge.xts(resp.test.rpart.xts, test_set.y$USREC)
+plot.xts(resp.test.rpart.xts, legend.loc = "topright")
 ```
 
 
-```{r}
-# Roc curve 
-pred.pca <- prediction(predictions = pred.prob.test.pca, labels = test_set.y$USREC) 
-perf.pca <- performance(pred.pca,"tpr","fpr")
-plot(perf.pca,colorize=TRUE)
-```
+#### Logistic regression based
 
-PCA not very good probably because the principal components are based on train set and test set may not be conforming to same PC's. We might try doing PCA n whole and then using PC's based on full data set for both test and train.
+1. From the training data identofy
+
+
+
 
 
 
