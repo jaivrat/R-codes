@@ -539,7 +539,9 @@ plot.xts(merge.xts(rf.pred.test.response.xts, test_set.y), legend.loc = "toprigh
 ```
 
 
-#### Lets handpick columns
+#### Logistic regression model on PCA of those columns which are statistically significant.
+
+
 ```{r}
 #m1$importance[order(m1$importance), , drop = FALSE]
 
