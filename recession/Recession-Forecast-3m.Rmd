@@ -95,7 +95,7 @@ Seems that there are many missing till 1959-12-01. Let us drop these initial row
 
 ```{r}
 direct.df.xts <- window(direct.df.xts,start = as.Date("1959-12-01") + 1)
-vis_dat(data.frame(direct.df.xts))
+#vis_dat(data.frame(direct.df.xts))
 ```
 
 
@@ -187,18 +187,16 @@ res.xts <- get.augmented.data(direct.df.xts)
 
 ##### Vizualize the enhanced dataset
 ```{r}
-vis_dat(data.frame(coredata(res.xts)))
+#vis_dat(data.frame(coredata(res.xts)))
 ```
 
 ##### Unavailable data
 
 Let us drop data which have more than 2% NA and also drop initial rows for which we hve implied NA's because of yoy/mom/sem transformations.
 ```{r}
-x <- apply(res.xts, 2, function(x) sum(is.na(x))/length(x))
+x       <- apply(res.xts, 2, function(x) sum(is.na(x))/length(x))
 res.xts <- res.xts[, names(x[x<0.02])]
-
-
-vis_dat(data.frame(coredata(res.xts)))
+#vis_dat(data.frame(coredata(res.xts)))
 ```
 
 
@@ -229,7 +227,7 @@ Check for stationarity and drop those columns which as non-stationary
 testStationarity <- function(col.name, in.time.series.xts)
 {
    this.ser <- in.time.series.xts[, col.name]
-   adf.test(this.ser[!is.na(this.ser)])$p.value
+   adf.test(this.ser[!is.na(this.ser)], alternative = "stationary")$p.value
 }
 
 suppressWarnings(test.pvals <- sapply(names(res.xts), 
@@ -239,12 +237,11 @@ suppressWarnings(test.pvals <- sapply(names(res.xts),
                                         }))
 # Non-stationary
 #names(test.pvals)[test.pvals > 0.05]
-
 #rop those columns which as non-stationary
 res.xts <- res.xts[ ,names(test.pvals)[test.pvals <= 0.05] ]
 ```
 
-#### Do we need to make them stationary (We have dropped non statinary above)
+#### Do we need to make them stationary (We have dropped non stationary above)
 ```{r}
 # suggest.diff <- sapply(names(res.xts), 
 #                              function(series.name){
@@ -276,8 +273,7 @@ res.xts <- res.xts[ ,names(test.pvals)[test.pvals <= 0.05] ]
 
 #### Lets have look at NA's
 ```{r}
-library(visdat)
-vis_dat(data.frame(res.xts))
+#vis_dat(data.frame(res.xts))
 ```
 
 
@@ -293,14 +289,9 @@ vis_dat(data.frame(res.xts))
 
 Till this point we have only **stationary** and **complete** data series from  **1961-01-01** to **2019-11-01**.
 
-
-
-
-
 ## FINAL ANALYSIS
 
 We begin here our final analysis on **res.xts** which contains  **stationary** and **complete** data series from  **1961-01-01** to **2019-11-01**.
-
 
 Explore how many recessions for data we have in FredMD
 
@@ -309,18 +300,23 @@ plot.xts(window(rec.df.xts, start =  first(index(res.xts)), end =  last(index(re
 ```
 
 
-We see that we have 10 recessions in before 2000.  We can separate training/test data into pre-yr2000 and post-yr2000 respectively. 
+We see that we have 8 recessions in before 2000.  We can separate training/test data into pre-yr2000 and post-yr2000 respectively. 
 
 ```{r}
-
-
-#--- Add recession
-tmp.res.xts.names     <- names(res.xts); tmp.rec.df.xts.names <- names(rec.df.xts)
-final.data.xts        <- merge.xts(lag.xts(rec.df.xts, k = -FORECAST.TENOR), res.xts)
-names(final.data.xts) <- c(tmp.rec.df.xts.names, tmp.res.xts.names)
+#-------------- Add recession ---------------------#
+#Inputs : The X data and the recession time series
+#         Adjusts the recession data by the forecast tenor and
+#         appends to 
+add.recession.data <- function(res.xts, rec.df.xts)
+{
+  tmp.res.xts.names     <- names(res.xts); tmp.rec.df.xts.names <- names(rec.df.xts)
+  final.data.xts        <- merge.xts(lag.xts(rec.df.xts, k = -FORECAST.TENOR), res.xts)
+  names(final.data.xts) <- c(tmp.rec.df.xts.names, tmp.res.xts.names)
+  final.data.xts[complete.cases(final.data.xts), ]
+}
 
 #-- Only complete Cases
-final.data.xts        <- final.data.xts[complete.cases(final.data.xts), ]
+final.data.xts        <- add.recession.data(res.xts, rec.df.xts)
 
 
 #pca$rotation
@@ -479,10 +475,111 @@ plot.xts(resp.test.rpart.xts, legend.loc = "topright")
 
 #### Logistic regression based
 
-1. From the training data identofy
+1. From the training data identify which variables are highly explaining the 
+
+```{r}
+
+logistic.summary <- function(var.name)
+{
+#var.name <- names(train_set.x.scaled)[1]
+      temp.df <- data.frame(USREC  = coredata(train_set.y$USREC), var.name = as.numeric(train_set.x.scaled[, var.name]))
+      tmp.logistic.fit <- glm(USREC ~ ., data = temp.df, family = "binomial")
+      sum.res <- summary(tmp.logistic.fit)
+      p.val <- sum.res$coefficients[, "Pr(>|z|)"]["var.name"]
+      as.numeric(p.val)
+}
+
+logistic.summary(names(train_set.x.scaled)[1])
+res.lm <- sapply(names(train_set.x.scaled), logistic.summary)
+
+
+#Statistically significant columns
+stat.sig.cols <- names(res.lm[res.lm < 0.05])
+
+library(randomForest) # basic implementation
+library(ranger)       # a faster implementation of randomForest
+
+# for reproduciblity
+set.seed(123)
+
+
+temp.train.df = data.frame(USREC = as.factor(train_set.y$USREC), as.data.frame(train_set.x.scaled[, stat.sig.cols]))
+# default RF model
+m1 <- randomForest(
+  formula = USREC ~ .,
+  data    = temp.train.df
+)
+
+plot(m1)
+
+
+# Variable Importance
+varImpPlot(m1,  
+           sort = T,
+           n.var=10,
+           main="Top 10 - Variable Importance")
+
+
+# Predicting response variable
+rf.pred.train.response = predict(m1 , temp.train.df)
+rf.pred.train.response.xts <- xts(as.numeric(levels(rf.pred.train.response)[as.numeric(rf.pred.train.response)]), index(train_set.y))
+names(rf.pred.train.response.xts) <- "train.pred.rf"
+#merge.xts(rf.pred.train.response.xts, train_set.y)
+plot.xts(merge.xts(rf.pred.train.response.xts, train_set.y), legend.loc = "topright")
+
+
+# Predicting on test set 
+temp.test.df = data.frame(USREC = as.factor(test_set.y$USREC), #DO not need this column though
+                          as.data.frame(test_set.x.scaled[, stat.sig.cols]))
+rf.pred.test.response = predict(m1 , temp.test.df)
+rf.pred.test.response.xts <- xts(as.numeric(levels(rf.pred.test.response)[as.numeric(rf.pred.test.response)]), index(test_set.y))
+names(rf.pred.test.response.xts) <- "test.pred.rf"
+plot.xts(merge.xts(rf.pred.test.response.xts, test_set.y), legend.loc = "topright")
+
+```
+
+
+#### Lets handpick columns
+```{r}
+#m1$importance[order(m1$importance), , drop = FALSE]
+
+#Statistically significant columns
+chosen.cols <- last(stat.sig.cols, 200)
+
+
+#Let us do PCA of  selected columns
+#We have got scales 
+pca.train         <- prcomp(train_set.x.scaled[,chosen.cols], scale = FALSE, center = FALSE) 
+pca.train.var     <- pca.train$sdev^2
+pca.var.per       <- pca.train.var/sum(pca.train.var)
+
+#Min components needed
+VARIANCE.EXPLAIN.THESH = 0.90
+num.comp <- min(which(cumsum(pca.var.per) >= VARIANCE.EXPLAIN.THESH))
+
+print(sprintf("#Components explaining %s = %s, total features = %s", VARIANCE.EXPLAIN.THESH,num.comp , length(pca.var.per)))
+barplot(round(pca.train.var/sum(pca.train.var) * 100, 1), xlab = "principal-component", ylab="pct. variation")
+
+train_set.x.pca <- (train_set.x.scaled[,chosen.cols] %*% pca.train$rotation)[, 1:num.comp]
 
 
 
+dat.df.pca    <- data.frame("USREC" = as.factor(train_set.y$USREC), train_set.x.pca)
+pca.fit.logit <- glm(USREC ~ ., data = dat.df.pca, family = "binomial")
+pca.fit.logit <- glm(USREC ~ ., data = dat.df.pca[, 1:5], family = "binomial")
+
+#ON Train Set 
+pred.prob.train.pca <- predict(pca.fit.logit, dat.df.pca, type = "response")
+resp.train.pca.xts  <- xts(pred.prob.train.pca, index(train_set.x.scaled))
+resp.train.pca.xts      <- merge.xts(resp.train.pca.xts, train_set.y$USREC)
+plot(resp.train.pca.xts)
 
 
+#Prediction on Test Set
+test_set.x.pca <- data.frame((test_set.x.scaled[,chosen.cols] %*% pca.train$rotation)[, 1:num.comp])
+pred.prob.test.pca  <- predict(pca.fit.logit, test_set.x.pca, type = "response")
+resp.test.pca.xts   <- xts(pred.prob.test.pca, index(test_set.x.scaled))
+resp.test.pca.xts   <- merge.xts(resp.test.pca.xts, test_set.y$USREC)
+plot(resp.test.pca.xts)
+```
 
